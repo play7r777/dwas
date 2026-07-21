@@ -31,7 +31,8 @@ function Remotes.Init()
 	for _, name in ipairs(EVENT_NAMES) do
 		local re = Instance.new("RemoteEvent")
 		re.Name = name
-		re.Parent = folderend
+		re.Parent = folder
+	end
 
 	for _, name in ipairs(FUNCTION_NAMES) do
 		local rf = Instance.new("RemoteFunction")

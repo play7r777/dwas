@@ -91,9 +91,11 @@ function PlotManager.Init()
 		for id, plot in pairs(plots) do
 			if plot.owner == nil then
 				plot.owner = player
-				playerPlot[player] = idplot.label.Text = player.Name
+				playerPlot[player] = id
+				plot.label.Text = player.Name
 				player.RespawnLocation = plot.spawn
-				print("[PlotManager] " .. player.Name .. " → участок " .. id)break
+				print("[PlotManager] " .. player.Name .. " → участок " .. id)
+				break
 			end
 		end
 	end)

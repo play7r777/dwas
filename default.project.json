@@ -1,20 +1,36 @@
-﻿{
+{
   "name": "newew31",
   "tree": {
     "$className": "DataModel",
-
+    "Lighting": {
+      "$properties": {
+        "Ambient": [
+          0.3,
+          0.35,
+          0.4
+        ],
+        "Brightness": 2.0,
+        "ClockTime": 14.0,
+        "GlobalShadows": true,
+        "Outlines": false,
+        "Technology": "Future"
+      }
+    },
     "ReplicatedStorage": {
       "Shared": {
         "$path": "src/shared"
       }
     },
-
     "ServerScriptService": {
       "Server": {
         "$path": "src/server"
       }
     },
-
+    "SoundService": {
+      "$properties": {
+        "RespectFilteringEnabled": true
+      }
+    },
     "StarterPlayer": {
       "StarterPlayerScripts": {
         "Client": {
@@ -22,38 +38,32 @@
         }
       }
     },
-
     "Workspace": {
-      "$properties": {
-        "FilteringEnabled": true
-      },
       "Baseplate": {
         "$className": "Part",
         "$properties": {
           "Anchored": true,
-          "Color": [0.29, 0.59, 0.18],
-          "Material": "Grass",
+          "Color": [
+            0.29,
+            0.59,
+            0.18
+          ],
           "Locked": true,
-          "Position": [0, -1, 0],
-          "Size": [512, 2, 512]
+          "Material": "Grass",
+          "Position": [
+            0.0,
+            -1.0,
+            0.0
+          ],
+                    "Size": [
+            900.0,
+            2.0,
+            900.0
+          ]
         }
-      }
-    },
-
-    "Lighting": {
+      },
       "$properties": {
-        "Ambient": [0.3, 0.35, 0.4],
-        "Brightness": 2,
-        "GlobalShadows": true,
-        "Outlines": false,
-        "Technology": "Future",
-        "ClockTime": 14
-      }
-    },
-
-    "SoundService": {
-      "$properties": {
-        "RespectFilteringEnabled": true
+        "FilteringEnabled": true
       }
     }
   }

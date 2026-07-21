@@ -23,7 +23,7 @@ local function load(player)
 	end)
 	local data = defaultData()
 	if ok and saved then
-		data.money   = saved.moneyor data.money
+		data.money   = saved.money or data.money
 		data.rockets = saved.rockets or data.rockets
 	end
 	-- Анимация хранится отдельно
@@ -42,7 +42,8 @@ local function save(player)
 	local uid = tostring(player.UserId)
 	pcall(function()
 		moneyStore:SetAsync(uid, { money = data.money, rockets = data.rockets })
-	end)pcall(function()
+	end)
+	pcall(function()
 		animStore:SetAsync(uid, data.animEnabled)
 	end)
 end
