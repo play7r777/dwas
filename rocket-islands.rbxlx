@@ -1,0 +1,1974 @@
+<roblox version="4">
+  <Item class="Lighting" referent="0">
+    <Properties>
+      <string name="Name">Lighting</string>
+      <Color3 name="Ambient">
+        <R>0.38</R>
+        <G>0.43</G>
+        <B>0.48</B>
+      </Color3>
+      <float name="Brightness">2.5</float>
+      <float name="ClockTime">13.5</float>
+      <float name="EnvironmentDiffuseScale">0.65</float>
+      <float name="EnvironmentSpecularScale">0.8</float>
+      <bool name="GlobalShadows">true</bool>
+      <bool name="Outlines">false</bool>
+      <token name="Technology">4</token>
+    </Properties>
+    <Item class="Atmosphere" referent="1">
+      <Properties>
+        <string name="Name">Atmosphere</string>
+        <Color3 name="Color">
+          <R>0.78</R>
+          <G>0.9</G>
+          <B>1</B>
+        </Color3>
+        <Color3 name="Decay">
+          <R>0.32</R>
+          <G>0.52</G>
+          <B>0.62</B>
+        </Color3>
+        <float name="Density">0.2</float>
+        <float name="Glare">0.12</float>
+        <float name="Haze">0.8</float>
+      </Properties>
+    </Item>
+  </Item>
+  <Item class="ReplicatedStorage" referent="2">
+    <Properties>
+      <string name="Name">ReplicatedStorage</string>
+    </Properties>
+    <Item class="Folder" referent="3">
+      <Properties>
+        <string name="Name">Shared</string>
+      </Properties>
+      <Item class="ModuleScript" referent="4">
+        <Properties>
+          <string name="Name">Config</string>
+          <string name="Source">-- Config.luau - shared balance and world configuration
+local Config = {}
+
+Config.START_MONEY = 350
+Config.FARM_INTERVAL = 4
+
+Config.WATER_LEVEL = 0
+Config.WORLD_SIZE = 2048
+Config.PLOT_CENTER_SIZE = 88
+Config.SLOT_PLATFORM_SIZE = 42
+
+-- Each launcher stores one rocket and reloads independently after firing.
+Config.START_LAUNCHERS = 1
+Config.MAX_LAUNCHERS = 6
+Config.LAUNCHER_COSTS = { 0, 250, 650, 1500, 3500, 8000 }
+Config.ROCKET_RELOAD = 12
+Config.ROCKET_DAMAGE = 150
+Config.ROCKET_SPEED = 115
+Config.ROCKET_ANIM_TIME = 3.2
+Config.ROCKET_ARC = 95
+
+Config.FARM_TYPES = {
+	[1] = {
+		name = "Солнечная станция",
+		cost = 100,
+		income = 15,
+		maxHp = 120,
+		cooldown = 15,
+		color = Color3.fromRGB(50, 180, 240),
+		material = Enum.Material.SmoothPlastic,
+	},
+	[2] = {
+		name = "Кристальная шахта",
+		cost = 500,
+		income = 60,
+		maxHp = 280,
+		cooldown = 25,
+		color = Color3.fromRGB(180, 70, 240),
+		material = Enum.Material.Neon,
+	},
+	[3] = {
+		name = "Био-Лаборатория",
+		cost = 2200,
+		income = 220,
+		maxHp = 550,
+		cooldown = 40,
+		color = Color3.fromRGB(60, 220, 100),
+		material = Enum.Material.Glass,
+	},
+	[4] = {
+		name = "Плазменный генератор",
+		cost = 8000,
+		income = 750,
+		maxHp = 1000,
+		cooldown = 60,
+		color = Color3.fromRGB(255, 140, 30),
+		material = Enum.Material.Neon,
+	},
+	[5] = {
+		name = "Квантовый реактор",
+		cost = 30000,
+		income = 2500,
+		maxHp = 2000,
+		cooldown = 90,
+		color = Color3.fromRGB(240, 50, 180),
+		material = Enum.Material.ForceField,
+	},
+}
+
+-- Six islands around the central combat lane.
+Config.PLOT_POSITIONS = {
+	Vector3.new(-260, 6, -260),
+	Vector3.new(0, 6, -360),
+	Vector3.new(260, 6, -260),
+	Vector3.new(-260, 6, 260),
+	Vector3.new(0, 6, 360),
+	Vector3.new(260, 6, 260),
+}
+
+local radius = 82
+Config.SLOT_OFFSETS = {
+	[1] = Vector3.new(0, 0, -radius),
+	[2] = Vector3.new(radius * math.cos(math.rad(18)), 0, -radius * math.sin(math.rad(18))),
+	[3] = Vector3.new(radius * math.cos(math.rad(-54)), 0, radius * math.sin(math.rad(54))),
+	[4] = Vector3.new(-radius * math.cos(math.rad(-54)), 0, radius * math.sin(math.rad(54))),
+	[5] = Vector3.new(-radius * math.cos(math.rad(18)), 0, -radius * math.sin(math.rad(18))),
+}
+
+Config.SILO_OFFSET = Vector3.new(0, 0, 0)
+Config.LAUNCHER_OFFSETS = {
+	Vector3.new(-18, 0, -8),
+	Vector3.new(0, 0, -8),
+	Vector3.new(18, 0, -8),
+	Vector3.new(-18, 0, 12),
+	Vector3.new(0, 0, 12),
+	Vector3.new(18, 0, 12),
+}
+
+return Config</string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="5">
+        <Properties>
+          <string name="Name">Hello</string>
+          <string name="Source"><![CDATA[return function()
+	print("Hello, world!")
+end
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="6">
+        <Properties>
+          <string name="Name">Remotes</string>
+          <string name="Source">-- Remotes.luau - shared RemoteEvent and RemoteFunction registry
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+
+local Remotes = {}
+
+local EVENT_NAMES = {
+	"BuyLauncher",
+	"BuyBuildingSlot",
+	"LaunchRocket",
+	"RocketFired",
+	"UpdateData",
+	"RocketStateChanged",
+	"BuildingStateChanged",
+	"SpawnIncomeFX",
+	"Notify",
+	"SetAnimSetting",
+}
+
+local FUNCTION_NAMES = {
+	"GetAnimSetting",      -- RemoteFunction: получить настройку анимации
+	"GetGameInfo",         -- RemoteFunction: получить текущее состояние всех островов и зданий
+}
+
+function Remotes.Init()
+	local folder = ReplicatedStorage:FindFirstChild("GameRemotes")
+	if not folder then
+		folder = Instance.new("Folder")
+		folder.Name = "GameRemotes"
+		folder.Parent = ReplicatedStorage
+	end
+
+	for _, name in ipairs(EVENT_NAMES) do
+		if not folder:FindFirstChild(name) then
+			local re = Instance.new("RemoteEvent")
+			re.Name = name
+			re.Parent = folder
+		end
+	end
+
+	for _, name in ipairs(FUNCTION_NAMES) do
+		if not folder:FindFirstChild(name) then
+			local rf = Instance.new("RemoteFunction")
+			rf.Name = name
+			rf.Parent = folder
+		end
+	end
+end
+
+function Remotes.Get(name)
+	local folder = ReplicatedStorage:WaitForChild("GameRemotes", 10)
+	if not folder then
+		error("[Remotes] GameRemotes folder not found!")
+	end
+	return folder:WaitForChild(name, 10)
+end
+
+return Remotes</string>
+        </Properties>
+      </Item>
+    </Item>
+  </Item>
+  <Item class="ServerScriptService" referent="7">
+    <Properties>
+      <string name="Name">ServerScriptService</string>
+    </Properties>
+    <Item class="Script" referent="8">
+      <Properties>
+        <string name="Name">Server</string>
+        <token name="RunContext">0</token>
+        <string name="Source"><![CDATA[-- init.server.luau — Точка входа сервера для Rojo
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local sharedFolder      = ReplicatedStorage:WaitForChild("Shared", 10)
+
+local Remotes       = require(sharedFolder:WaitForChild("Remotes"))
+local DataManager   = require(script:WaitForChild("DataManager"))
+local PlotManager   = require(script:WaitForChild("PlotManager"))
+local FarmManager   = require(script:WaitForChild("FarmManager"))
+local RocketManager = require(script:WaitForChild("RocketManager"))
+
+-- 1. Инициализация сетевых событий
+Remotes.Init()
+
+-- 2. Инициализация менеджеров
+DataManager.Init()
+PlotManager.Init()
+FarmManager.Init()
+RocketManager.Init()
+
+print("==================================================")
+print("[Server] Tycoon Rocket Battle запущен через Rojo!")
+print("==================================================")
+]]></string>
+      </Properties>
+      <Item class="ModuleScript" referent="9">
+        <Properties>
+          <string name="Name">DataManager</string>
+          <string name="Source">-- DataManager.luau - persistent money, launcher count, and player preferences
+local Players          = game:GetService("Players")
+local DataStoreService = game:GetService("DataStoreService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local sharedFolder     = ReplicatedStorage:WaitForChild("Shared", 10)
+
+local Remotes          = require(sharedFolder:WaitForChild("Remotes"))
+local Config           = require(sharedFolder:WaitForChild("Config"))
+
+local DataManager = {}
+
+local playerData = {}
+
+local moneyStore = DataStoreService:GetDataStore("TycoonMoney_v3")
+local animStore  = DataStoreService:GetDataStore("TycoonAnim_v3")
+
+local function defaultData()
+	return { money = Config.START_MONEY, launchers = Config.START_LAUNCHERS, animEnabled = true }
+end
+
+local function load(player)
+	local uid = tostring(player.UserId)
+	local ok, saved = pcall(function()
+		return moneyStore:GetAsync(uid)
+	end)
+
+	local data = defaultData()
+	if ok and saved then
+		data.money = tonumber(saved.money) or data.money
+		data.launchers = math.clamp(tonumber(saved.launchers) or Config.START_LAUNCHERS, Config.START_LAUNCHERS, Config.MAX_LAUNCHERS)
+	end
+
+	local ok2, animVal = pcall(function()
+		return animStore:GetAsync(uid)
+	end)
+	if ok2 and animVal ~= nil then
+		data.animEnabled = animVal
+	end
+
+	playerData[player] = data
+end
+
+local function save(player)
+	local data = playerData[player]
+	if not data then return end
+	local uid = tostring(player.UserId)
+	pcall(function()
+		moneyStore:UpdateAsync(uid, function()
+			return { money = data.money, launchers = data.launchers }
+		end)
+	end)
+	pcall(function()
+		animStore:SetAsync(uid, data.animEnabled)
+	end)
+end
+
+function DataManager.Init()
+	Players.PlayerAdded:Connect(function(player)
+		load(player)
+		task.delay(1, function()
+			if player and player.Parent then
+				DataManager.SendUpdate(player)
+			end
+		end)
+	end)
+
+	for _, player in ipairs(Players:GetPlayers()) do
+		load(player)
+		task.delay(1, function()
+			if player and player.Parent then
+				DataManager.SendUpdate(player)
+			end
+		end)
+	end
+
+	Players.PlayerRemoving:Connect(function(player)
+		save(player)
+		playerData[player] = nil
+	end)
+
+	local setAnim = Remotes.Get("SetAnimSetting")
+	setAnim.OnServerEvent:Connect(function(player, enabled)
+		local data = playerData[player]
+		if data then
+			data.animEnabled = enabled == true
+			pcall(function()
+				animStore:SetAsync(tostring(player.UserId), data.animEnabled)
+			end)
+		end
+	end)
+
+	local getAnim = Remotes.Get("GetAnimSetting")
+	getAnim.OnServerInvoke = function(player)
+		local data = playerData[player]
+		return data and data.animEnabled ~= false
+	end
+
+end
+
+function DataManager.GetData(player)
+	return playerData[player]
+end
+
+function DataManager.GetMoney(player)
+	local data = playerData[player]
+	return data and data.money or 0
+end
+
+function DataManager.AddMoney(player, amount)
+	local data = playerData[player]
+	if data then
+		data.money = math.max(0, data.money + amount)
+		DataManager.SendUpdate(player)
+	end
+end
+
+function DataManager.GetLauncherCount(player)
+	local data = playerData[player]
+	return data and data.launchers or 0
+end
+
+function DataManager.BuyNextLauncher(player)
+	local data = playerData[player]
+	if not data then return false, "Данные игрока загружаются" end
+	if data.launchers &gt;= Config.MAX_LAUNCHERS then return false, "Все 6 установок уже построены" end
+	local nextCount = data.launchers + 1
+	local cost = Config.LAUNCHER_COSTS[nextCount]
+	if data.money &lt; cost then return false, string.format("Нужно ещё $%d", cost - data.money) end
+	data.money -= cost
+	data.launchers = nextCount
+	DataManager.SendUpdate(player)
+	return true, nextCount
+end
+
+function DataManager.SendUpdate(player)
+	local data = playerData[player]
+	if not data then return end
+	local ev = Remotes.Get("UpdateData")
+	ev:FireClient(player, {
+		money = data.money,
+		launchers = data.launchers,
+		animEnabled = data.animEnabled,
+	})
+end
+
+return DataManager</string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="10">
+        <Properties>
+          <string name="Name">FarmManager</string>
+          <string name="Source">-- FarmManager.luau — Строительство зданий, логика доходов, получение урона и КД восстановления
+local Players           = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local sharedFolder      = ReplicatedStorage:WaitForChild("Shared", 10)
+
+local Config            = require(sharedFolder:WaitForChild("Config"))
+local Remotes           = require(sharedFolder:WaitForChild("Remotes"))
+local DataManager       = require(script.Parent:WaitForChild("DataManager"))
+local PlotManager       = require(script.Parent:WaitForChild("PlotManager"))
+
+local FarmManager = {}
+
+-- plotFarms[plotId][slotIndex] = { tier, hp, maxHp, alive, rebuildTimer, folder, body, hpBar, statusLabel }
+local plotFarms = {}
+
+-- Генерация кусочка суши и моста при покупке слота
+local function buildTerritory(plotId, slotIndex)
+	local plot = PlotManager.GetPlot(plotId)
+	local slotInfo = plot.slots[slotIndex]
+	local center = slotInfo.center
+	local edgePos = slotInfo.edgePos
+	
+	local territoryFolder = Instance.new("Folder")
+	territoryFolder.Name = "Territory_" .. slotIndex
+	territoryFolder.Parent = plot.folder
+
+	local dist = (center - edgePos).Magnitude
+
+	-- Мост
+	local bridge = Instance.new("Part")
+	bridge.Name = "Bridge"
+	bridge.Anchored = true
+	bridge.Size = Vector3.new(6, 1, dist)
+	bridge.CFrame = CFrame.lookAt(edgePos, center) * CFrame.new(0, 1.5, -dist / 2)
+	bridge.Color = Color3.fromRGB(100, 70, 40)
+	bridge.Material = Enum.Material.Wood
+	bridge.Parent = territoryFolder
+
+	-- Опоры моста
+	local support = Instance.new("Part")
+	support.Name = "BridgeSupport"
+	support.Anchored = true
+	support.Shape = Enum.PartType.Cylinder
+	support.Size = Vector3.new(dist, 1.5, 1.5)
+	support.Orientation = bridge.Orientation + Vector3.new(0, 90, 0)
+	support.Position = bridge.Position - Vector3.new(0, 1, 0)
+	support.Color = Color3.fromRGB(50, 35, 20)
+	support.Material = Enum.Material.Wood
+	support.Parent = territoryFolder
+
+	-- Sand platform keeps every expansion in the island theme.
+	local top = Instance.new("Part")
+	top.Name = "IslandTop"
+	top.Anchored = true
+	top.Shape = Enum.PartType.Cylinder
+	top.Size = Vector3.new(4, Config.SLOT_PLATFORM_SIZE, Config.SLOT_PLATFORM_SIZE)
+	top.Orientation = Vector3.new(0, 0, 90)
+	top.Position = center
+	top.Color = Color3.fromRGB(232, 204, 139)
+	top.Material = Enum.Material.Sand
+	top.Parent = territoryFolder
+
+	-- Платформа - Камень
+	local bottom = Instance.new("Part")
+	bottom.Name = "RockBottom"
+	bottom.Anchored = true
+	bottom.Shape = Enum.PartType.Cylinder
+	bottom.Size = Vector3.new(16, Config.SLOT_PLATFORM_SIZE * 0.8, Config.SLOT_PLATFORM_SIZE * 0.8)
+	bottom.Orientation = Vector3.new(0, 0, 90)
+	bottom.Position = center - Vector3.new(0, 10, 0)
+	bottom.Color = Color3.fromRGB(91, 82, 71)
+	bottom.Material = Enum.Material.Rock
+	bottom.Parent = territoryFolder
+
+	-- Неоновый обод
+	local border = Instance.new("Part")
+	border.Name = "NeonBorder"
+	border.Anchored = true
+	border.Shape = Enum.PartType.Cylinder
+	border.Size = Vector3.new(1.5, Config.SLOT_PLATFORM_SIZE + 1.5, Config.SLOT_PLATFORM_SIZE + 1.5)
+	border.Orientation = Vector3.new(0, 0, 90)
+	border.Position = center + Vector3.new(0, 2, 0)
+	border.Color = plot.themeColor
+	border.Material = Enum.Material.Neon
+	border.CanCollide = false
+	border.Parent = territoryFolder
+	
+	return territoryFolder
+end
+
+-- Уникальные 3D модели зданий
+local function buildBuildingModel(plotId, slotIndex, tier, territoryFolder)
+	local plot = PlotManager.GetPlot(plotId)
+	local slotInfo = plot.slots[slotIndex]
+	local center = slotInfo.center
+	local farmConfig = Config.FARM_TYPES[tier]
+
+	local farmFolder = Instance.new("Folder")
+	farmFolder.Name = "FarmSlot_" .. slotIndex
+	farmFolder:SetAttribute("Alive", true)
+	farmFolder.Parent = territoryFolder
+
+	local mainBody -- Центральная часть для Gui
+	
+	-- База для всех зданий
+	local base = Instance.new("Part")
+	base.Anchored = true
+	base.Size = Vector3.new(16, 1, 16)
+	base.Position = center + Vector3.new(0, 2.5, 0)
+	base.Color = Color3.fromRGB(40, 40, 45)
+	base.Material = Enum.Material.DiamondPlate
+	base.Parent = farmFolder
+	mainBody = base
+
+	local heightOffset = 3
+
+	if tier == 1 then
+		-- Солнечная ферма
+		local pillar = Instance.new("Part")
+		pillar.Anchored = true
+		pillar.Size = Vector3.new(2, 8, 2)
+		pillar.Position = base.Position + Vector3.new(0, 4, 0)
+		pillar.Color = Color3.fromRGB(150, 150, 150)
+		pillar.Parent = farmFolder
+		
+		local panel = Instance.new("Part")
+		panel.Anchored = true
+		panel.Size = Vector3.new(12, 0.5, 12)
+		panel.CFrame = CFrame.new(pillar.Position + Vector3.new(0, 4, 0)) * CFrame.Angles(math.rad(30), 0, 0)
+		panel.Color = farmConfig.color
+		panel.Material = farmConfig.material
+		panel.Parent = farmFolder
+		mainBody = panel
+		heightOffset = 5
+
+	elseif tier == 2 then
+		-- Кристальная шахта
+		mainBody = Instance.new("Part")
+		mainBody.Anchored = true
+		mainBody.Size = Vector3.new(10, 6, 10)
+		mainBody.Position = base.Position + Vector3.new(0, 3, 0)
+		mainBody.Color = Color3.fromRGB(60, 50, 60)
+		mainBody.Material = Enum.Material.Slate
+		mainBody.Parent = farmFolder
+		
+		for i = 1, 4 do
+			local crystal = Instance.new("Part")
+			crystal.Anchored = true
+			crystal.Shape = Enum.PartType.Ball
+			crystal.Size = Vector3.new(4, 12, 4)
+			crystal.CFrame = CFrame.new(mainBody.Position + Vector3.new(0, 4, 0)) * CFrame.Angles(math.rad(math.random(-30, 30)), math.rad(i * 90), math.rad(30))
+			crystal.Color = farmConfig.color
+			crystal.Material = Enum.Material.Neon
+			crystal.Parent = farmFolder
+		end
+		heightOffset = 10
+
+	elseif tier == 3 then
+		-- Био-Лаборатория
+		mainBody = Instance.new("Part")
+		mainBody.Anchored = true
+		mainBody.Shape = Enum.PartType.Cylinder
+		mainBody.Size = Vector3.new(10, 14, 14)
+		mainBody.Orientation = Vector3.new(0, 0, 90)
+		mainBody.Position = base.Position + Vector3.new(0, 5, 0)
+		mainBody.Color = Color3.fromRGB(150, 150, 150)
+		mainBody.Material = Enum.Material.Metal
+		mainBody.Parent = farmFolder
+
+		local dome = Instance.new("Part")
+		dome.Anchored = true
+		dome.Shape = Enum.PartType.Ball
+		dome.Size = Vector3.new(12, 12, 12)
+		dome.Position = mainBody.Position + Vector3.new(0, 2, 0)
+		dome.Color = Color3.fromRGB(200, 255, 200)
+		dome.Material = Enum.Material.Glass
+		dome.Transparency = 0.5
+		dome.Parent = farmFolder
+
+		local fluid = Instance.new("Part")
+		fluid.Anchored = true
+		fluid.Shape = Enum.PartType.Ball
+		fluid.Size = Vector3.new(8, 8, 8)
+		fluid.Position = dome.Position
+		fluid.Color = farmConfig.color
+		fluid.Material = Enum.Material.Neon
+		fluid.Parent = farmFolder
+		heightOffset = 9
+
+	elseif tier == 4 then
+		-- Плазменный генератор
+		mainBody = Instance.new("Part")
+		mainBody.Anchored = true
+		mainBody.Shape = Enum.PartType.Cylinder
+		mainBody.Size = Vector3.new(12, 8, 8)
+		mainBody.Orientation = Vector3.new(0, 0, 90)
+		mainBody.Position = base.Position + Vector3.new(0, 6, 0)
+		mainBody.Color = Color3.fromRGB(40, 40, 40)
+		mainBody.Material = Enum.Material.Metal
+		mainBody.Parent = farmFolder
+
+		local orb = Instance.new("Part")
+		orb.Anchored = true
+		orb.Shape = Enum.PartType.Ball
+		orb.Size = Vector3.new(8, 8, 8)
+		orb.Position = mainBody.Position + Vector3.new(0, 8, 0)
+		orb.Color = farmConfig.color
+		orb.Material = Enum.Material.Neon
+		orb.Parent = farmFolder
+		heightOffset = 18
+
+	elseif tier == 5 then
+		-- Квантовый реактор
+		mainBody = Instance.new("Part")
+		mainBody.Anchored = true
+		mainBody.Size = Vector3.new(10, 16, 10)
+		mainBody.Position = base.Position + Vector3.new(0, 8, 0)
+		mainBody.Color = Color3.fromRGB(20, 20, 20)
+		mainBody.Material = Enum.Material.Metal
+		mainBody.Parent = farmFolder
+
+		local ring = Instance.new("Part")
+		ring.Anchored = true
+		ring.Shape = Enum.PartType.Cylinder
+		ring.Size = Vector3.new(4, 20, 20)
+		ring.Orientation = Vector3.new(45, 45, 90)
+		ring.Position = mainBody.Position
+		ring.Color = farmConfig.color
+		ring.Material = Enum.Material.Neon
+		ring.CanCollide = false
+		ring.Parent = farmFolder
+
+		local core = Instance.new("Part")
+		core.Anchored = true
+		core.Shape = Enum.PartType.Ball
+		core.Size = Vector3.new(10, 10, 10)
+		core.Position = mainBody.Position
+		core.Color = farmConfig.color
+		core.Material = Enum.Material.ForceField
+		core.Parent = farmFolder
+		heightOffset = 12
+	end
+
+	-- 3D Информационная панель над зданием
+	local gui = Instance.new("BillboardGui")
+	gui.Name = "StatusGui"
+	gui.Size = UDim2.new(0, 180, 0, 50)
+	gui.StudsOffset = Vector3.new(0, heightOffset, 0)
+	gui.AlwaysOnTop = false
+	gui.Parent = mainBody
+
+	local nameLabel = Instance.new("TextLabel")
+	nameLabel.Size = UDim2.new(1, 0, 0, 18)
+	nameLabel.BackgroundTransparency = 1
+	nameLabel.Text = string.format("%s (Тир %d)", farmConfig.name, tier)
+	nameLabel.TextColor3 = Color3.fromRGB(255, 220, 50)
+	nameLabel.TextScaled = true
+	nameLabel.Font = Enum.Font.GothamBold
+	nameLabel.Parent = gui
+
+	local hpBg = Instance.new("Frame")
+	hpBg.Name = "HpBg"
+	hpBg.Size = UDim2.new(1, 0, 0, 12)
+	hpBg.Position = UDim2.new(0, 0, 0, 20)
+	hpBg.BackgroundColor3 = Color3.fromRGB(180, 40, 40)
+	hpBg.BorderSizePixel = 0
+	hpBg.Parent = gui
+
+	local hpBar = Instance.new("Frame")
+	hpBar.Name = "HpBar"
+	hpBar.Size = UDim2.new(1, 0, 1, 0)
+	hpBar.BackgroundColor3 = Color3.fromRGB(50, 220, 50)
+	hpBar.BorderSizePixel = 0
+	hpBar.Parent = hpBg
+
+	local statusLabel = Instance.new("TextLabel")
+	statusLabel.Size = UDim2.new(1, 0, 0, 14)
+	statusLabel.Position = UDim2.new(0, 0, 0, 34)
+	statusLabel.BackgroundTransparency = 1
+	statusLabel.Text = "+$" .. farmConfig.income
+	statusLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
+	statusLabel.TextScaled = true
+	statusLabel.Font = Enum.Font.GothamMedium
+	statusLabel.Parent = gui
+
+	return farmFolder, mainBody, hpBar, statusLabel
+end
+
+local function spawnBuilding(plotId, slotIndex, tier)
+	if not plotFarms[plotId] then plotFarms[plotId] = {} end
+
+	local oldData = plotFarms[plotId][slotIndex]
+	if oldData and oldData.folder then
+		oldData.folder:Destroy()
+	end
+	
+	local plot = PlotManager.GetPlot(plotId)
+	
+	-- Если территории еще нет, строим её
+	local territoryFolder = plot.folder:FindFirstChild("Territory_" .. slotIndex)
+	if not territoryFolder then
+		territoryFolder = buildTerritory(plotId, slotIndex)
+	end
+
+	local farmConfig = Config.FARM_TYPES[tier]
+	local folder, body, hpBar, statusLabel = buildBuildingModel(plotId, slotIndex, tier, territoryFolder)
+
+	if plot and plot.slots[slotIndex] then
+		plot.slots[slotIndex].buyPad.Transparency = 1
+		plot.slots[slotIndex].buyPad.CanCollide = false
+		plot.slots[slotIndex].buyText.Visible = false
+	end
+	
+	-- Активация кнопки СЛЕДУЮЩЕГО слота (последовательная прокачка)
+	local nextSlot = slotIndex + 1
+	if plot and plot.slots[nextSlot] and not (plotFarms[plotId] and plotFarms[plotId][nextSlot]) then
+		plot.slots[nextSlot].buyPad.Transparency = 0
+		plot.slots[nextSlot].buyPad.CanCollide = true
+		plot.slots[nextSlot].buyText.Visible = true
+	end
+
+	plotFarms[plotId][slotIndex] = {
+		tier = tier,
+		hp = farmConfig.maxHp,
+		maxHp = farmConfig.maxHp,
+		alive = true,
+		folder = folder,
+		body = body,
+		hpBar = hpBar,
+		statusLabel = statusLabel,
+		rebuildTimer = 0,
+	}
+
+	Remotes.Get("BuildingStateChanged"):FireAllClients(plotId, slotIndex, {
+		tier = tier,
+		hp = farmConfig.maxHp,
+		maxHp = farmConfig.maxHp,
+		alive = true,
+		rebuildTimer = 0,
+	})
+end
+
+function FarmManager.BuySlot(player, slotIndex)
+	local plotId = select(1, PlotManager.GetPlotByPlayer(player))
+	if not plotId then return end
+
+	-- Проверка последовательности прокачки: можно купить слот N, только если есть слот N-1
+	if slotIndex &gt; 1 and (not plotFarms[plotId] or not plotFarms[plotId][slotIndex - 1]) then
+		return
+	end
+
+	local farmConfig = Config.FARM_TYPES[slotIndex]
+	if not farmConfig then return end
+
+	local currentData = plotFarms[plotId] and plotFarms[plotId][slotIndex]
+	if currentData then return end
+
+	local playerMoney = DataManager.GetMoney(player)
+	if playerMoney &gt;= farmConfig.cost then
+		DataManager.AddMoney(player, -farmConfig.cost)
+		spawnBuilding(plotId, slotIndex, slotIndex)
+		print(string.format("[FarmManager] %s открыл новую территорию и построил %s!", player.Name, farmConfig.name))
+	end
+end
+
+local function destroyBuilding(plotId, slotIndex)
+	local slotData = plotFarms[plotId] and plotFarms[plotId][slotIndex]
+	if not slotData or not slotData.alive then return end
+
+	slotData.alive = false
+	if slotData.folder then slotData.folder:SetAttribute("Alive", false) end
+	local farmConfig = Config.FARM_TYPES[slotData.tier]
+	local cd = farmConfig.cooldown
+
+	if slotData.folder then
+		for _, part in ipairs(slotData.folder:GetDescendants()) do
+			if part:IsA("BasePart") then
+				part.Color = Color3.fromRGB(60, 60, 65)
+				part.Material = Enum.Material.Concrete
+			end
+		end
+	end
+
+	if slotData.hpBar then slotData.hpBar.Size = UDim2.new(0, 0, 1, 0) end
+
+	task.spawn(function()
+		for timeLeft = cd, 1, -1 do
+			if not slotData or slotData.alive then break end
+			slotData.rebuildTimer = timeLeft
+			if slotData.statusLabel then
+				slotData.statusLabel.Text = string.format("Ремонт %dс", timeLeft)
+				slotData.statusLabel.TextColor3 = Color3.fromRGB(255, 80, 80)
+			end
+
+			Remotes.Get("BuildingStateChanged"):FireAllClients(plotId, slotIndex, {
+				tier = slotData.tier,
+				hp = 0,
+				maxHp = slotData.maxHp,
+				alive = false,
+				rebuildTimer = timeLeft,
+			})
+			task.wait(1)
+		end
+
+		local plot = PlotManager.GetPlot(plotId)
+		if plot and plot.owner then
+			spawnBuilding(plotId, slotIndex, slotData.tier)
+			print(string.format("[FarmManager] Остров #%d Слот #%d заново восстановлен!", plotId, slotIndex))
+		end
+	end)
+end
+
+function FarmManager.Init()
+	for plotId, plot in pairs(PlotManager.GetAllPlots()) do
+		for slotIdx, slotInfo in ipairs(plot.slots) do
+			slotInfo.buyPad.Touched:Connect(function(hit)
+				local char = hit.Parent
+				local player = Players:GetPlayerFromCharacter(char)
+				if player and plot.owner == player then
+					FarmManager.BuySlot(player, slotIdx)
+				end
+			end)
+		end
+	end
+
+	local buyEvent = Remotes.Get("BuyBuildingSlot")
+	buyEvent.OnServerEvent:Connect(function(player, slotIndex)
+		if type(slotIndex) == "number" then
+			FarmManager.BuySlot(player, slotIndex)
+		end
+	end)
+
+	Players.PlayerAdded:Connect(function(player)
+		task.wait(1.5)
+		local plotId = select(1, PlotManager.GetPlotByPlayer(player))
+		if plotId then
+			if not plotFarms[plotId] then plotFarms[plotId] = {} end
+			
+			-- Делаем кнопку первого слота видимой
+			local plot = PlotManager.GetPlot(plotId)
+			if plot and plot.slots[1] then
+				plot.slots[1].buyPad.Transparency = 0
+				plot.slots[1].buyPad.CanCollide = true
+				plot.slots[1].buyText.Visible = true
+			end
+		end
+	end)
+
+	Players.PlayerRemoving:Connect(function(player)
+		local plotId = player:GetAttribute("PlotId") or select(1, PlotManager.GetPlotByPlayer(player))
+		if plotId and plotFarms[plotId] then
+			for _, slotData in pairs(plotFarms[plotId]) do
+				if slotData.folder then slotData.folder:Destroy() end
+			end
+			plotFarms[plotId] = nil
+		end
+	end)
+
+	task.spawn(function()
+		while true do
+			task.wait(Config.FARM_INTERVAL)
+			for _, player in ipairs(Players:GetPlayers()) do
+				local plotId = select(1, PlotManager.GetPlotByPlayer(player))
+				if plotId and plotFarms[plotId] then
+					for slotIdx, slotData in pairs(plotFarms[plotId]) do
+						if slotData and slotData.alive then
+							local farmConfig = Config.FARM_TYPES[slotData.tier]
+							if farmConfig then
+								DataManager.AddMoney(player, farmConfig.income)
+								local plot = PlotManager.GetPlot(plotId)
+								if plot and plot.slots[slotIdx] then
+									Remotes.Get("SpawnIncomeFX"):FireClient(player, plot.slots[slotIdx].center + Vector3.new(0, 10, 0), farmConfig.income)
+								end
+							end
+						end
+					end
+				end
+			end
+		end
+	end)
+end
+
+function FarmManager.GetSlotTargetPosition(plotId, slotIndex)
+	local plot = PlotManager.GetPlot(plotId)
+	if not plot or not plot.slots[slotIndex] then
+		return plot and plot.center or Vector3.zero
+	end
+	return plot.slots[slotIndex].center + Vector3.new(0, 6, 0)
+end
+
+function FarmManager.IsSlotAlive(plotId, slotIndex)
+	local slotData = plotFarms[plotId] and plotFarms[plotId][slotIndex]
+	return slotData ~= nil and slotData.alive == true
+end
+
+function FarmManager.DamageAtSlot(plotId, slotIndex, damage)
+	local slotData = plotFarms[plotId] and plotFarms[plotId][slotIndex]
+	if not slotData or not slotData.alive then return false end
+
+	slotData.hp = math.max(0, slotData.hp - damage)
+	if slotData.hpBar then
+		slotData.hpBar.Size = UDim2.new(math.clamp(slotData.hp / slotData.maxHp, 0, 1), 0, 1, 0)
+	end
+
+	if slotData.hp &lt;= 0 then
+		destroyBuilding(plotId, slotIndex)
+		return true
+	end
+	return false
+end
+
+function FarmManager.GetAllFarmData()
+	return plotFarms
+end
+
+return FarmManager</string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="11">
+        <Properties>
+          <string name="Name">PlotManager</string>
+          <string name="Source">-- PlotManager.luau - ocean world, sandy islands, wildlife, and launchers
+
+local Players           = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local sharedFolder      = ReplicatedStorage:WaitForChild("Shared", 10)
+local Config            = require(sharedFolder:WaitForChild("Config"))
+
+local PlotManager = {}
+
+local plots = {}
+local playerPlot = {}
+
+local PLOT_THEME_COLORS = {
+	Color3.fromRGB(46, 117, 224),
+	Color3.fromRGB(224, 76, 46),
+	Color3.fromRGB(46, 200, 90),
+	Color3.fromRGB(230, 180, 30),
+	Color3.fromRGB(170, 50, 230),
+	Color3.fromRGB(40, 210, 210),
+}
+
+local function makePart(parent, name, size, cframe, color, material)
+	local part = Instance.new("Part")
+	part.Name = name
+	part.Anchored = true
+	part.Size = size
+	part.CFrame = cframe
+	part.Color = color
+	part.Material = material
+	part.TopSurface = Enum.SurfaceType.Smooth
+	part.BottomSurface = Enum.SurfaceType.Smooth
+	part.Parent = parent
+	return part
+end
+
+local function buildShark(parent, index)
+	local model = Instance.new("Model")
+	model.Name = "Shark_" .. index
+	model.Parent = parent
+
+	local radius = 120 + (index % 3) * 55
+	local angle = index / 10 * math.pi * 2
+	local body = makePart(model, "Body", Vector3.new(4, 4, 13), CFrame.new(), Color3.fromRGB(67, 88, 101), Enum.Material.SmoothPlastic)
+	body.Shape = Enum.PartType.Ball
+	body.CanCollide = false
+	local fin = makePart(model, "Fin", Vector3.new(0.7, 5, 5), CFrame.new(), body.Color, Enum.Material.SmoothPlastic)
+	fin.CanCollide = false
+	local tail = makePart(model, "Tail", Vector3.new(0.8, 7, 5), CFrame.new(), body.Color, Enum.Material.SmoothPlastic)
+	tail.CanCollide = false
+	model.PrimaryPart = body
+
+	task.spawn(function()
+		local t = angle
+		while model.Parent do
+			t += 0.007
+			local position = Vector3.new(math.cos(t) * radius, Config.WATER_LEVEL + 1.2, math.sin(t) * radius)
+			local nextPosition = Vector3.new(math.cos(t + 0.03) * radius, position.Y, math.sin(t + 0.03) * radius)
+			model:PivotTo(CFrame.lookAt(position, nextPosition))
+			fin.CFrame = body.CFrame * CFrame.new(0, 3, 1) * CFrame.Angles(0, 0, math.rad(45))
+			tail.CFrame = body.CFrame * CFrame.new(0, 0, 7)
+			task.wait(0.05)
+		end
+	end)
+end
+
+local function buildOcean()
+	local terrain = workspace.Terrain
+	terrain:Clear()
+	terrain.WaterColor = Color3.fromRGB(18, 126, 170)
+	terrain.WaterTransparency = 0.28
+	terrain.WaterReflectance = 0.22
+	terrain.WaterWaveSize = 0.22
+	terrain.WaterWaveSpeed = 11
+	terrain:FillBlock(CFrame.new(0, Config.WATER_LEVEL - 20, 0), Vector3.new(Config.WORLD_SIZE, 40, Config.WORLD_SIZE), Enum.Material.Water)
+
+	local world = Instance.new("Folder")
+	world.Name = "OceanWildlife"
+	world.Parent = workspace
+	for index = 1, 10 do
+		buildShark(world, index)
+	end
+end
+
+local function buildIslandModel(plotId, position)
+	local folder = Instance.new("Folder")
+	folder.Name = "Plot_" .. plotId
+	folder:SetAttribute("PlotId", plotId)
+	folder:SetAttribute("OwnerUserId", 0)
+	folder.Parent = workspace
+
+	local themeColor = PLOT_THEME_COLORS[plotId] or Color3.fromRGB(150, 150, 150)
+
+	-- Wide sand cap above a submerged rock foundation.
+	local islandTop = Instance.new("Part")
+	islandTop.Name = "IslandTop"
+	islandTop.Anchored = true
+	islandTop.Shape = Enum.PartType.Cylinder
+	islandTop.Size = Vector3.new(7, Config.PLOT_CENTER_SIZE, Config.PLOT_CENTER_SIZE)
+	islandTop.Orientation = Vector3.new(0, 0, 90)
+	islandTop.Position = position
+	islandTop.Color = Color3.fromRGB(232, 204, 139)
+	islandTop.Material = Enum.Material.Sand
+	islandTop.Parent = folder
+
+	-- 2. Скалистый поддон (чтобы остров уходил под воду)
+	local rockBottom = Instance.new("Part")
+	rockBottom.Name = "RockBottom"
+	rockBottom.Anchored = true
+	rockBottom.Shape = Enum.PartType.Cylinder
+	rockBottom.Size = Vector3.new(20, Config.PLOT_CENTER_SIZE * 0.85, Config.PLOT_CENTER_SIZE * 0.85)
+	rockBottom.Orientation = Vector3.new(0, 0, 90)
+	rockBottom.Position = position - Vector3.new(0, 10, 0)
+	rockBottom.Color = Color3.fromRGB(91, 82, 71)
+	rockBottom.Material = Enum.Material.Rock
+	rockBottom.Parent = folder
+
+	-- 3. Точка спавна игрока
+	local spawn = Instance.new("SpawnLocation")
+	spawn.Name = "PlotSpawn"
+	spawn.Anchored = true
+	spawn.Size = Vector3.new(6, 1, 6)
+	spawn.Position = position + Vector3.new(0, 2.5, -15)
+	spawn.Color = themeColor
+	spawn.Material = Enum.Material.SmoothPlastic
+	spawn.Neutral = false
+	spawn.Duration = 0
+	spawn.Parent = folder
+
+	-- 4. Вывеска острова
+	local signPart = Instance.new("Part")
+	signPart.Name = "OwnerSign"
+	signPart.Anchored = true
+	signPart.Size = Vector3.new(12, 4, 1)
+	signPart.Position = position + Vector3.new(0, 6, -24)
+	signPart.Color = Color3.fromRGB(30, 30, 35)
+	signPart.Material = Enum.Material.SmoothPlastic
+	signPart.Parent = folder
+
+	local signBb = Instance.new("BillboardGui")
+	signBb.Size = UDim2.new(0, 280, 0, 70)
+	signBb.StudsOffset = Vector3.new(0, 1, 0)
+	signBb.AlwaysOnTop = false
+	signBb.Parent = signPart
+
+	local signText = Instance.new("TextLabel")
+	signText.Size = UDim2.new(1, 0, 1, 0)
+	signText.BackgroundTransparency = 1
+	signText.Text = "Остров " .. plotId
+	signText.TextColor3 = Color3.fromRGB(255, 255, 255)
+	signText.TextScaled = true
+	signText.Font = Enum.Font.GothamBold
+	signText.Parent = signBb
+
+	-- Launcher models are added here as the player expands from one to six.
+	local siloFolder = Instance.new("Folder")
+	siloFolder.Name = "RocketSilo"
+	siloFolder.Parent = folder
+
+	-- 6. Кнопки покупки (Зеленые круги на краю центрального острова)
+	local slotsData = {}
+	for slotIdx, offset in ipairs(Config.SLOT_OFFSETS) do
+		local farmConfig = Config.FARM_TYPES[slotIdx]
+		
+		-- Кнопка ставится на краю центрального острова по направлению к будущей платформе
+		local dir = offset.Unit
+		local edgePos = position + dir * ((Config.PLOT_CENTER_SIZE / 2) - 3)
+		
+		local buyPad = Instance.new("Part")
+		buyPad.Name = "BuyPad_" .. slotIdx
+		buyPad.Shape = Enum.PartType.Cylinder
+		buyPad.Anchored = true
+		buyPad.Size = Vector3.new(0.6, 6, 6) -- Тонкий круг
+		buyPad.Orientation = Vector3.new(0, 0, 90) -- Лежит плашмя
+		buyPad.Position = edgePos + Vector3.new(0, 2.3, 0)
+		buyPad.Color = Color3.fromRGB(50, 220, 80) -- Зеленый круг
+		buyPad.Material = Enum.Material.Neon
+		-- Изначально скрываем кнопки 2-5
+		if slotIdx &gt; 1 then
+			buyPad.Transparency = 1
+			buyPad.CanCollide = false
+		end
+		buyPad.Parent = folder
+
+		local buyBb = Instance.new("BillboardGui")
+		buyBb.Name = "BuyGui"
+		buyBb.Size = UDim2.new(0, 180, 0, 55)
+		buyBb.StudsOffset = Vector3.new(0, 3.5, 0)
+		buyBb.AlwaysOnTop = false
+		buyBb.Parent = buyPad
+
+		local buyText = Instance.new("TextLabel")
+		buyText.Size = UDim2.new(1, 0, 1, 0)
+		buyText.BackgroundTransparency = 1
+		buyText.Text = string.format("%s  $%d", farmConfig.name, farmConfig.cost)
+		buyText.TextColor3 = Color3.fromRGB(255, 255, 255)
+		buyText.TextScaled = true
+		buyText.Font = Enum.Font.GothamBold
+		buyText.Parent = buyBb
+		if slotIdx &gt; 1 then
+			buyText.Visible = false
+		end
+
+		slotsData[slotIdx] = {
+			center = position + offset, -- Истинный центр будущего здания
+			edgePos = edgePos,          -- Позиция кнопки и начала моста
+			buyPad = buyPad,
+			buyText = buyText,
+		}
+	end
+
+	plots[plotId] = {
+		owner = nil,
+		folder = folder,
+		center = position,
+		signText = signText,
+		spawn = spawn,
+		slots = slotsData,
+		themeColor = themeColor,
+		launchers = {},
+	}
+end
+
+local function assignPlayerToPlot(player)
+	for id, plot in pairs(plots) do
+		if plot.owner == nil then
+			plot.owner = player
+			playerPlot[player] = id
+			player:SetAttribute("PlotId", id)
+			plot.folder:SetAttribute("OwnerUserId", player.UserId)
+			plot.signText.Text = player.DisplayName
+			player.RespawnLocation = plot.spawn
+
+			local char = player.Character or player.CharacterAdded:Wait()
+			if char then
+				task.wait(0.2)
+				char:PivotTo(plot.spawn.CFrame + Vector3.new(0, 4, 0))
+			end
+
+			print(string.format("[PlotManager] %s успешно назначен на Остров #%d", player.Name, id))
+			break
+		end
+	end
+end
+
+function PlotManager.Init()
+	local oldWildlife = workspace:FindFirstChild("OceanWildlife")
+	if oldWildlife then oldWildlife:Destroy() end
+	buildOcean()
+
+	for i, pos in ipairs(Config.PLOT_POSITIONS) do
+		buildIslandModel(i, pos)
+	end
+
+	Players.PlayerAdded:Connect(function(player)
+		player.CharacterAdded:Connect(function(char)
+			local plotId = playerPlot[player]
+			if plotId and plots[plotId] then
+				task.wait(0.2)
+				char:PivotTo(plots[plotId].spawn.CFrame + Vector3.new(0, 4, 0))
+			end
+		end)
+		assignPlayerToPlot(player)
+	end)
+
+	for _, player in ipairs(Players:GetPlayers()) do
+		if not playerPlot[player] then
+			assignPlayerToPlot(player)
+		end
+	end
+
+	Players.PlayerRemoving:Connect(function(player)
+		local id = playerPlot[player]
+		if id then
+			local plot = plots[id]
+			if plot then
+				plot.owner = nil
+				plot.folder:SetAttribute("OwnerUserId", 0)
+				plot.signText.Text = "Остров " .. id
+				plot.folder.RocketSilo:ClearAllChildren()
+				plot.launchers = {}
+			end
+			playerPlot[player] = nil
+		end
+	end)
+end
+
+function PlotManager.CreateLauncher(player, launcherIndex)
+	local _, plot = PlotManager.GetPlotByPlayer(player)
+	if not plot or plot.launchers[launcherIndex] then return plot and plot.launchers[launcherIndex] end
+	local offset = Config.LAUNCHER_OFFSETS[launcherIndex]
+	if not offset then return nil end
+
+	local model = Instance.new("Model")
+	model.Name = "Launcher_" .. launcherIndex
+	model:SetAttribute("LauncherIndex", launcherIndex)
+	model.Parent = plot.folder:FindFirstChild("RocketSilo")
+	local position = plot.center + offset + Vector3.new(0, 4, 0)
+	local base = makePart(model, "Base", Vector3.new(12, 2, 12), CFrame.new(position), Color3.fromRGB(52, 60, 67), Enum.Material.DiamondPlate)
+	local rim = makePart(model, "ReadyRim", Vector3.new(1, 10, 10), CFrame.new(position + Vector3.new(0, 1.5, 0)) * CFrame.Angles(0, 0, math.rad(90)), plot.themeColor, Enum.Material.Neon)
+	rim.Shape = Enum.PartType.Cylinder
+	rim.CanCollide = false
+	local rocket = makePart(model, "Rocket", Vector3.new(12, 3.2, 3.2), CFrame.new(position + Vector3.new(0, 7.5, 0)) * CFrame.Angles(0, 0, math.rad(90)), Color3.fromRGB(224, 230, 232), Enum.Material.Metal)
+	rocket.Shape = Enum.PartType.Cylinder
+	local nose = makePart(model, "Nose", Vector3.new(3.5, 3.5, 3.5), CFrame.new(position + Vector3.new(0, 14.5, 0)), plot.themeColor, Enum.Material.Neon)
+	nose.Shape = Enum.PartType.Ball
+	nose.CanCollide = false
+	model.PrimaryPart = base
+	plot.launchers[launcherIndex] = { model = model, rocket = rocket, nose = nose, rim = rim, origin = nose.Position }
+	return plot.launchers[launcherIndex]
+end
+
+function PlotManager.SetLauncherReady(player, launcherIndex, ready)
+	local _, plot = PlotManager.GetPlotByPlayer(player)
+	local launcher = plot and plot.launchers[launcherIndex]
+	if not launcher then return end
+	launcher.rocket.Transparency = ready and 0 or 1
+	launcher.nose.Transparency = ready and 0 or 1
+	launcher.rim.Color = ready and plot.themeColor or Color3.fromRGB(85, 91, 95)
+end
+
+function PlotManager.GetLauncherOrigin(player, launcherIndex)
+	local _, plot = PlotManager.GetPlotByPlayer(player)
+	local launcher = plot and plot.launchers[launcherIndex]
+	return launcher and launcher.origin
+end
+
+function PlotManager.GetPlotByPlayer(player)
+	local id = playerPlot[player]
+	return id, plots[id]
+end
+
+function PlotManager.GetPlot(plotId)
+	return plots[plotId]
+end
+
+function PlotManager.GetAllPlots()
+	return plots
+end
+
+function PlotManager.GetPlayerByPlot(plotId)
+	local plot = plots[plotId]
+	return plot and plot.owner
+end
+
+return PlotManager</string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="12">
+        <Properties>
+          <string name="Name">RocketManager</string>
+          <string name="Source">-- RocketManager.luau - launcher purchases, reloads, and authoritative combat
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local sharedFolder      = ReplicatedStorage:WaitForChild("Shared", 10)
+
+local Config            = require(sharedFolder:WaitForChild("Config"))
+local Remotes           = require(sharedFolder:WaitForChild("Remotes"))
+local DataManager       = require(script.Parent:WaitForChild("DataManager"))
+local PlotManager       = require(script.Parent:WaitForChild("PlotManager"))
+local FarmManager       = require(script.Parent:WaitForChild("FarmManager"))
+
+local RocketManager = {}
+
+local launcherReady = {}
+local lastRequest = {}
+
+local function notify(player, message, kind)
+	Remotes.Get("Notify"):FireClient(player, message, kind or "info")
+end
+
+local function sendRocketState(player)
+	local count = DataManager.GetLauncherCount(player)
+	local readyCount = 0
+	local reloads = {}
+	local now = workspace:GetServerTimeNow()
+	for index = 1, count do
+		local readyAt = launcherReady[player] and launcherReady[player][index] or 0
+		if readyAt &lt;= now then readyCount += 1 else reloads[index] = math.max(0, readyAt - now) end
+	end
+	Remotes.Get("RocketStateChanged"):FireClient(player, {
+		launchers = count,
+		ready = readyCount,
+		reloads = reloads,
+	})
+end
+
+local function createOwnedLaunchers(player)
+	launcherReady[player] = launcherReady[player] or {}
+	for index = 1, DataManager.GetLauncherCount(player) do
+		PlotManager.CreateLauncher(player, index)
+		launcherReady[player][index] = launcherReady[player][index] or 0
+	end
+	sendRocketState(player)
+end
+
+local function takeReadyLauncher(player)
+	local now = workspace:GetServerTimeNow()
+	for index = 1, DataManager.GetLauncherCount(player) do
+		if (launcherReady[player] and launcherReady[player][index] or 0) &lt;= now then
+			launcherReady[player][index] = now + Config.ROCKET_RELOAD
+			PlotManager.SetLauncherReady(player, index, false)
+			sendRocketState(player)
+			task.delay(Config.ROCKET_RELOAD, function()
+				if player.Parent and launcherReady[player] and launcherReady[player][index] then
+					launcherReady[player][index] = 0
+					PlotManager.SetLauncherReady(player, index, true)
+					sendRocketState(player)
+				end
+			end)
+			return index
+		end
+	end
+	return nil
+end
+
+function RocketManager.Init()
+	local launchEvent = Remotes.Get("LaunchRocket")
+	local firedEvent = Remotes.Get("RocketFired")
+
+	local function setupPlayer(player)
+		task.spawn(function()
+			for _ = 1, 30 do
+				if not player.Parent then return end
+				local plotId = select(1, PlotManager.GetPlotByPlayer(player))
+				if plotId and DataManager.GetData(player) then
+					createOwnedLaunchers(player)
+					return
+				end
+				task.wait(0.2)
+			end
+		end)
+	end
+	game:GetService("Players").PlayerAdded:Connect(setupPlayer)
+	game:GetService("Players").PlayerRemoving:Connect(function(player)
+		launcherReady[player] = nil
+		lastRequest[player] = nil
+	end)
+	for _, player in ipairs(game:GetService("Players"):GetPlayers()) do setupPlayer(player) end
+
+	Remotes.Get("BuyLauncher").OnServerEvent:Connect(function(player)
+		local success, result = DataManager.BuyNextLauncher(player)
+		if not success then notify(player, result, "error") return end
+		launcherReady[player] = launcherReady[player] or {}
+		launcherReady[player][result] = 0
+		PlotManager.CreateLauncher(player, result)
+		sendRocketState(player)
+		notify(player, string.format("Установка %d построена", result), "success")
+	end)
+
+	launchEvent.OnServerEvent:Connect(function(player, targetPlotId, targetSlotIndex)
+		local now = os.clock()
+		if now - (lastRequest[player] or 0) &lt; 0.2 then return end
+		lastRequest[player] = now
+		if type(targetPlotId) ~= "number" or type(targetSlotIndex) ~= "number" then return end
+		if targetPlotId % 1 ~= 0 or targetSlotIndex % 1 ~= 0 or targetSlotIndex &lt; 1 or targetSlotIndex &gt; #Config.FARM_TYPES then return end
+
+		local targetPlot = PlotManager.GetPlot(targetPlotId)
+		local myPlotId = select(1, PlotManager.GetPlotByPlayer(player))
+		if not targetPlot or not targetPlot.owner or myPlotId == targetPlotId then return end
+		if not FarmManager.IsSlotAlive(targetPlotId, targetSlotIndex) then
+			notify(player, "Эта цель недоступна", "error")
+			return
+		end
+
+		local launcherIndex = takeReadyLauncher(player)
+		if not launcherIndex then
+			notify(player, "Все ракеты перезаряжаются", "error")
+			return
+		end
+		local originPos = PlotManager.GetLauncherOrigin(player, launcherIndex)
+		if not originPos then return end
+		local targetPos = FarmManager.GetSlotTargetPosition(targetPlotId, targetSlotIndex)
+		local destroyed = FarmManager.DamageAtSlot(targetPlotId, targetSlotIndex, Config.ROCKET_DAMAGE)
+
+		firedEvent:FireAllClients({
+			shooterName = player.DisplayName,
+			originPos = originPos,
+			targetPos = targetPos,
+			targetPlotId = targetPlotId,
+			targetSlotIndex = targetSlotIndex,
+			destroyed = destroyed,
+		})
+	end)
+end
+
+return RocketManager</string>
+        </Properties>
+      </Item>
+    </Item>
+  </Item>
+  <Item class="SoundService" referent="13">
+    <Properties>
+      <string name="Name">SoundService</string>
+      <bool name="RespectFilteringEnabled">true</bool>
+    </Properties>
+  </Item>
+  <Item class="StarterPlayer" referent="14">
+    <Properties>
+      <string name="Name">StarterPlayer</string>
+    </Properties>
+    <Item class="StarterPlayerScripts" referent="15">
+      <Properties>
+        <string name="Name">StarterPlayerScripts</string>
+      </Properties>
+      <Item class="LocalScript" referent="16">
+        <Properties>
+          <string name="Name">Client</string>
+          <string name="Source"><![CDATA[-- init.client.luau - Rojo client entry point
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local sharedFolder      = ReplicatedStorage:WaitForChild("Shared", 10)
+
+local Remotes    = require(sharedFolder:WaitForChild("Remotes"))
+local HudManager = require(script:WaitForChild("HudManager"))
+local RocketAnim = require(script:WaitForChild("RocketAnim"))
+local VisualFX   = require(script:WaitForChild("VisualFX"))
+
+-- Получение настроек анимации
+local getAnimFn = Remotes.Get("GetAnimSetting")
+local animEnabled = true
+pcall(function()
+	animEnabled = getAnimFn:InvokeServer()
+end)
+
+-- Инициализация HUD
+HudManager.Init(animEnabled)
+
+-- Слушатели сетевых событий
+local rocketFired = Remotes.Get("RocketFired")
+rocketFired.OnClientEvent:Connect(function(data)
+	RocketAnim.Play(data, HudManager.IsAnimEnabled())
+end)
+
+local updateData = Remotes.Get("UpdateData")
+updateData.OnClientEvent:Connect(function(data)
+	HudManager.UpdateData(data)
+end)
+
+local rocketState = Remotes.Get("RocketStateChanged")
+rocketState.OnClientEvent:Connect(function(data)
+	HudManager.UpdateRocketState(data)
+end)
+
+local notify = Remotes.Get("Notify")
+notify.OnClientEvent:Connect(function(message, kind)
+	local colors = {
+		success = Color3.fromRGB(98, 220, 144),
+		error = Color3.fromRGB(239, 117, 91),
+		info = Color3.fromRGB(235, 239, 241),
+	}
+	HudManager.ShowNotification(message, colors[kind] or colors.info)
+end)
+
+local spawnIncomeFX = Remotes.Get("SpawnIncomeFX")
+spawnIncomeFX.OnClientEvent:Connect(function(pos, amount)
+	VisualFX.SpawnIncome(pos, amount)
+end)
+
+print("[Client] Rocket Islands client connected")
+]]></string>
+        </Properties>
+        <Item class="ModuleScript" referent="17">
+          <Properties>
+            <string name="Name">HudManager</string>
+            <string name="Source">-- HudManager.luau - compact economy, launcher status, and target controls
+local Players           = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local UserInputService  = game:GetService("UserInputService")
+local sharedFolder      = ReplicatedStorage:WaitForChild("Shared", 10)
+
+local Remotes           = require(sharedFolder:WaitForChild("Remotes"))
+local Config            = require(sharedFolder:WaitForChild("Config"))
+
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+
+local HudManager = {}
+
+local animEnabled = true
+local moneyLabel, rocketLabel, buyRocketBtn
+local launcherCount = Config.START_LAUNCHERS
+local rocketReady = Config.START_LAUNCHERS
+local targetListFrame
+local notifFrame, notifLabel, notifThread
+
+local function makeFrame(parent, size, pos, color, alpha, name)
+	local f = Instance.new("Frame")
+	f.Name = name or "Frame"
+	f.Size = size
+	f.Position = pos
+	f.BackgroundColor3 = color or Color3.fromRGB(25, 25, 35)
+	f.BackgroundTransparency = alpha or 0.15
+	f.BorderSizePixel = 0
+	f.Parent = parent
+	local c = Instance.new("UICorner")
+	c.CornerRadius = UDim.new(0, 8)
+	c.Parent = f
+	return f
+end
+
+local function makeLabel(parent, text, size, pos, color, fontSize, font)
+	local l = Instance.new("TextLabel")
+	l.Size = size
+	l.Position = pos
+	l.BackgroundTransparency = 1
+	l.Text = text
+	l.TextColor3 = color or Color3.fromRGB(255, 255, 255)
+	l.TextSize = fontSize or 15
+	l.Font = font or Enum.Font.GothamMedium
+	l.TextXAlignment = Enum.TextXAlignment.Left
+	l.Parent = parent
+	return l
+end
+
+local function makeButton(parent, text, size, pos, bgColor, textColor)
+	local b = Instance.new("TextButton")
+	b.Size = size
+	b.Position = pos
+	b.BackgroundColor3 = bgColor or Color3.fromRGB(50, 120, 220)
+	b.BorderSizePixel = 0
+	b.Text = text
+	b.TextColor3 = textColor or Color3.fromRGB(255, 255, 255)
+	b.TextSize = 14
+	b.Font = Enum.Font.GothamBold
+	b.AutoButtonColor = true
+	b.Parent = parent
+	local c = Instance.new("UICorner")
+	c.CornerRadius = UDim.new(0, 6)
+	c.Parent = b
+	return b
+end
+
+function HudManager.ShowNotification(text, color)
+	if notifLabel and notifFrame then
+		notifLabel.Text = text
+		notifLabel.TextColor3 = color or Color3.fromRGB(255, 255, 255)
+		notifFrame.Visible = true
+		if notifThread then task.cancel(notifThread) end
+		notifThread = task.delay(4.5, function()
+			if notifFrame then notifFrame.Visible = false end
+		end)
+	end
+end
+
+local function getPlotForUser(userId)
+	for _, folder in ipairs(workspace:GetChildren()) do
+		if folder:GetAttribute("OwnerUserId") == userId then
+			return folder, folder:GetAttribute("PlotId")
+		end
+	end
+	return nil, nil
+end
+
+local function refreshTargets()
+	if not targetListFrame then return end
+	for _, child in ipairs(targetListFrame:GetChildren()) do
+		if child:IsA("Frame") or child:IsA("TextButton") then child:Destroy() end
+	end
+
+	for _, targetPlayer in ipairs(Players:GetPlayers()) do
+		if targetPlayer == player then continue end
+		local targetPlotFolder, targetPlotId = getPlotForUser(targetPlayer.UserId)
+		if not targetPlotFolder or not targetPlotId then continue end
+
+		local activeSlots = {}
+		for slotIndex = 1, #Config.FARM_TYPES do
+			local territory = targetPlotFolder:FindFirstChild("Territory_" .. slotIndex)
+			local farmFolder = territory and territory:FindFirstChild("FarmSlot_" .. slotIndex)
+			if farmFolder and farmFolder:GetAttribute("Alive") ~= false then
+				table.insert(activeSlots, slotIndex)
+			end
+		end
+		if #activeSlots == 0 then continue end
+
+		local card = makeFrame(targetListFrame, UDim2.new(1, -8, 0, 32 + #activeSlots * 30), UDim2.new(), Color3.fromRGB(35, 42, 47), 0.08, targetPlayer.Name)
+		makeLabel(card, targetPlayer.DisplayName, UDim2.new(1, -12, 0, 26), UDim2.fromOffset(7, 2), Color3.fromRGB(235, 239, 241), 14, Enum.Font.GothamBold)
+		for rowIndex, slotIndex in ipairs(activeSlots) do
+			local farmConfig = Config.FARM_TYPES[slotIndex]
+			local row = makeFrame(card, UDim2.new(1, -12, 0, 25), UDim2.fromOffset(6, 28 + (rowIndex - 1) * 30), Color3.fromRGB(48, 57, 62), 0, "Target_" .. slotIndex)
+			makeLabel(row, farmConfig.name, UDim2.new(1, -70, 1, 0), UDim2.fromOffset(6, 0), farmConfig.color, 11)
+			local attack = makeButton(row, "Огонь", UDim2.fromOffset(58, 21), UDim2.new(1, -62, 0, 2), Color3.fromRGB(205, 67, 55))
+			attack.TextSize = 11
+			attack.MouseButton1Click:Connect(function()
+				Remotes.Get("LaunchRocket"):FireServer(targetPlotId, slotIndex)
+			end)
+		end
+	end
+end
+
+local function setup3DClickTargeting()
+	local mouse = player:GetMouse()
+	UserInputService.InputBegan:Connect(function(input, gpe)
+		if gpe then return end
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			local targetPart = mouse.Target
+			if not targetPart then return end
+
+			local ancestorFolder = targetPart:FindFirstAncestor("FarmSlot_%d+") or targetPart.Parent
+			if ancestorFolder and ancestorFolder.Name:match("^FarmSlot_") and ancestorFolder:GetAttribute("Alive") ~= false then
+				local slotIndex = tonumber(ancestorFolder.Name:match("%d+"))
+				-- Ищем папку территории или плота
+				local territoryFolder = ancestorFolder.Parent
+				local plotFolder = territoryFolder and territoryFolder.Parent
+				local targetPlotId = plotFolder and plotFolder:GetAttribute("PlotId")
+				local ownerUserId = plotFolder and plotFolder:GetAttribute("OwnerUserId")
+				if targetPlotId and ownerUserId and ownerUserId ~= 0 and ownerUserId ~= player.UserId and slotIndex then
+					Remotes.Get("LaunchRocket"):FireServer(targetPlotId, slotIndex)
+				end
+			end
+		end
+	end)
+end
+
+function HudManager.Init(initAnimEnabled)
+	animEnabled = initAnimEnabled ~= false
+
+	local screenGui = Instance.new("ScreenGui")
+	screenGui.Name = "TycoonHud"
+	screenGui.ResetOnSpawn = false
+	screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Global
+	screenGui.Parent = playerGui
+
+	notifFrame = makeFrame(screenGui, UDim2.new(0, 360, 0, 50), UDim2.new(0.5, -180, 0, 10), Color3.fromRGB(20, 20, 25), 0.1, "NotifFrame")
+	notifFrame.ZIndex = 20
+	notifFrame.Visible = false
+
+	notifLabel = makeLabel(notifFrame, "", UDim2.new(1, -10, 1, 0), UDim2.new(0, 5, 0, 0), Color3.fromRGB(255, 255, 255), 14, Enum.Font.GothamBold)
+	notifLabel.TextXAlignment = Enum.TextXAlignment.Center
+
+	local resPanel = makeFrame(screenGui, UDim2.new(0, 230, 0, 105), UDim2.new(0, 12, 0, 12), Color3.fromRGB(20, 20, 30), 0.1, "ResPanel")
+
+	makeLabel(resPanel, "ROCKET ISLANDS", UDim2.new(1, -10, 0, 24), UDim2.new(0, 8, 0, 4), Color3.fromRGB(92, 205, 188), 16, Enum.Font.GothamBold)
+
+	moneyLabel = makeLabel(resPanel, "Деньги  $0", UDim2.new(1, -10, 0, 22), UDim2.new(0, 8, 0, 32), Color3.fromRGB(255, 214, 90), 15)
+	rocketLabel = makeLabel(resPanel, "Готово  1 / 1", UDim2.new(1, -10, 0, 22), UDim2.new(0, 8, 0, 56), Color3.fromRGB(98, 220, 144), 15)
+
+	local actPanel = makeFrame(screenGui, UDim2.new(0, 230, 0, 55), UDim2.new(0, 12, 0, 125), Color3.fromRGB(20, 20, 30), 0.1, "ActPanel")
+
+	buyRocketBtn = makeButton(actPanel, "Установка 2  $" .. Config.LAUNCHER_COSTS[2], UDim2.new(1, -16, 0, 38), UDim2.new(0, 8, 0, 8), Color3.fromRGB(33, 133, 151))
+	buyRocketBtn.MouseButton1Click:Connect(function()
+		Remotes.Get("BuyLauncher"):FireServer()
+	end)
+
+	local targetPanel = makeFrame(screenGui, UDim2.new(0, 260, 0, 380), UDim2.new(1, -272, 0, 12), Color3.fromRGB(20, 20, 30), 0.1, "TargetPanel")
+
+	makeLabel(targetPanel, "ЦЕЛИ", UDim2.new(1, -10, 0, 26), UDim2.new(0, 8, 0, 4), Color3.fromRGB(236, 108, 91), 16, Enum.Font.GothamBold)
+
+	local scrollFrame = Instance.new("ScrollingFrame")
+	scrollFrame.Size = UDim2.new(1, -10, 1, -36)
+	scrollFrame.Position = UDim2.new(0, 5, 0, 32)
+	scrollFrame.BackgroundTransparency = 1
+	scrollFrame.BorderSizePixel = 0
+	scrollFrame.ScrollBarThickness = 5
+	scrollFrame.AutomaticCanvasSize = Enum.AutomaticSize.Y
+	scrollFrame.Parent = targetPanel
+
+	local layout = Instance.new("UIListLayout")
+	layout.SortOrder = Enum.SortOrder.LayoutOrder
+	layout.Padding = UDim.new(0, 8)
+	layout.Parent = scrollFrame
+
+	targetListFrame = scrollFrame
+
+	setup3DClickTargeting()
+
+	Players.PlayerAdded:Connect(function() task.wait(1) refreshTargets() end)
+	Players.PlayerRemoving:Connect(function() task.wait(1) refreshTargets() end)
+	
+	-- Слушаем изменения зданий для обновления списка целей
+	local buildingState = Remotes.Get("BuildingStateChanged")
+	buildingState.OnClientEvent:Connect(function()
+		task.wait(0.5)
+		refreshTargets()
+	end)
+	
+	task.delay(1.5, refreshTargets)
+	
+	-- Регулярное обновление UI целей на случай если кто-то построился
+	task.spawn(function()
+		while true do
+			task.wait(5)
+			refreshTargets()
+		end
+	end)
+end
+
+function HudManager.UpdateData(data)
+	if moneyLabel then moneyLabel.Text = "Деньги  $" .. (data.money or 0) end
+	launcherCount = data.launchers or launcherCount
+	if buyRocketBtn then
+		if launcherCount &gt;= Config.MAX_LAUNCHERS then
+			buyRocketBtn.Text = "Все установки построены"
+			buyRocketBtn.Active = false
+			buyRocketBtn.BackgroundColor3 = Color3.fromRGB(73, 82, 86)
+		else
+			local nextCount = launcherCount + 1
+			buyRocketBtn.Text = string.format("Установка %d  $%d", nextCount, Config.LAUNCHER_COSTS[nextCount])
+			buyRocketBtn.Active = true
+			buyRocketBtn.BackgroundColor3 = Color3.fromRGB(33, 133, 151)
+		end
+	end
+end
+
+function HudManager.UpdateRocketState(data)
+	launcherCount = data.launchers or launcherCount
+	rocketReady = data.ready or 0
+	if rocketLabel then
+		rocketLabel.Text = string.format("Готово  %d / %d", rocketReady, launcherCount)
+		rocketLabel.TextColor3 = rocketReady &gt; 0 and Color3.fromRGB(98, 220, 144) or Color3.fromRGB(239, 117, 91)
+	end
+end
+
+function HudManager.IsAnimEnabled()
+	return animEnabled
+end
+
+return HudManager</string>
+          </Properties>
+        </Item>
+        <Item class="ModuleScript" referent="18">
+          <Properties>
+            <string name="Name">RocketAnim</string>
+            <string name="Source">-- RocketAnim.luau - arcing missile and impact effects
+local UserInputService  = game:GetService("UserInputService")
+local TweenService      = game:GetService("TweenService")
+local Debris            = game:GetService("Debris")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local sharedFolder      = ReplicatedStorage:WaitForChild("Shared", 10)
+
+local Config            = require(sharedFolder:WaitForChild("Config"))
+
+local RocketAnim = {}
+
+local function spawnExplosion(pos)
+	local ball = Instance.new("Part")
+	ball.Shape = Enum.PartType.Ball
+	ball.Size = Vector3.new(2, 2, 2)
+	ball.Position = pos
+	ball.Anchored = true
+	ball.CanCollide = false
+	ball.Material = Enum.Material.Neon
+	ball.Color = Color3.fromRGB(255, 140, 20)
+	ball.Parent = workspace
+
+	local ballTween = TweenService:Create(ball,
+		TweenInfo.new(0.4, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+		{ Size = Vector3.new(22, 22, 22), Transparency = 1 })
+	ballTween:Play()
+	Debris:AddItem(ball, 0.5)
+
+	local ring = Instance.new("Part")
+	ring.Shape = Enum.PartType.Cylinder
+	ring.Size = Vector3.new(0.6, 2, 2)
+	ring.Position = pos
+	ring.Anchored = true
+	ring.CanCollide = false
+	ring.Material = Enum.Material.Neon
+	ring.Color = Color3.fromRGB(255, 60, 20)
+	ring.Orientation = Vector3.new(0, 0, 90)
+	ring.Parent = workspace
+
+	local ringTween = TweenService:Create(ring,
+		TweenInfo.new(0.55, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+		{ Size = Vector3.new(0.6, 30, 30), Transparency = 1 })
+	ringTween:Play()
+	Debris:AddItem(ring, 0.6)
+
+	for i = 1, 8 do
+		task.spawn(function()
+			local smoke = Instance.new("Part")
+			smoke.Shape = Enum.PartType.Ball
+			smoke.Size = Vector3.new(3, 3, 3)
+			smoke.Position = pos + Vector3.new(
+				(math.random() - 0.5) * 10,
+				math.random() * 6,
+				(math.random() - 0.5) * 10
+			)
+			smoke.Anchored = true
+			smoke.CanCollide = false
+			smoke.Material = Enum.Material.SmoothPlastic
+			smoke.Color = Color3.fromRGB(60 + math.random(30), 60 + math.random(30), 65)
+			smoke.Parent = workspace
+
+			local st = TweenService:Create(smoke,
+				TweenInfo.new(0.9, Enum.EasingStyle.Quad),
+				{ Size = Vector3.new(9, 9, 9), Transparency = 1, Position = smoke.Position + Vector3.new(0, 10, 0) })
+			st:Play()
+			Debris:AddItem(smoke, 1)
+		end)
+	end
+end
+
+local function arcPos(origin, target, t)
+	local arc = Config.ROCKET_ARC
+	local straight = origin:Lerp(target, t)
+	local height = math.sin(t * math.pi) * arc
+	return Vector3.new(straight.X, straight.Y + height, straight.Z)
+end
+
+function RocketAnim.Play(data, animEnabled)
+	local origin = data.originPos
+	local target = data.targetPos
+
+	if not animEnabled then
+		spawnExplosion(target)
+		return
+	end
+
+	local rocket = Instance.new("Part")
+	rocket.Name = "Rocket"
+	rocket.Size = Vector3.new(1.5, 1.5, 5)
+	rocket.Position = origin
+	rocket.Anchored = true
+	rocket.CanCollide = false
+	rocket.Material = Enum.Material.Metal
+	rocket.Color = Color3.fromRGB(225, 230, 232)
+	rocket.Parent = workspace
+
+	local front = Instance.new("Attachment")
+	front.Position = Vector3.new(0, 0, -2)
+	front.Parent = rocket
+	local back = Instance.new("Attachment")
+	back.Position = Vector3.new(0, 0, 2.5)
+	back.Parent = rocket
+	local trail = Instance.new("Trail")
+	trail.Attachment0 = front
+	trail.Attachment1 = back
+	trail.Color = ColorSequence.new(Color3.fromRGB(255, 205, 70), Color3.fromRGB(235, 75, 35))
+	trail.Lifetime = 0.3
+	trail.MinLength = 0.4
+	trail.Parent = rocket
+
+	local light = Instance.new("PointLight")
+	light.Brightness = 8
+	light.Range = 20
+	light.Color = Color3.fromRGB(255, 120, 20)
+	light.Parent = rocket
+
+	local skipped = false
+	local skipConn
+	skipConn = UserInputService.InputBegan:Connect(function(input, gpe)
+		if gpe then return end
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			skipped = true
+		end
+	end)
+
+	local dist = (target - origin).Magnitude
+	local duration = math.clamp(dist / Config.ROCKET_SPEED, 0.8, Config.ROCKET_ANIM_TIME)
+	local steps = math.ceil(duration / 0.03)
+
+	for i = 1, steps do
+		if skipped then break end
+		local t = i / steps
+		local pos = arcPos(origin, target, t)
+
+		local nextT = math.min(t + 0.04, 1)
+		local nextPos = arcPos(origin, target, nextT)
+		local dir = (nextPos - pos)
+		if dir.Magnitude &gt; 0.001 then
+			rocket.CFrame = CFrame.lookAt(pos, pos + dir)
+		end
+
+		task.wait(0.03)
+	end
+
+	skipConn:Disconnect()
+	rocket:Destroy()
+
+	spawnExplosion(target)
+
+	local msg
+	if data.destroyed then
+		msg = string.format("%s уничтожил цель #%d", data.shooterName, data.targetSlotIndex or 1)
+	else
+		msg = string.format("%s атаковал остров %d", data.shooterName, data.targetPlotId or 1)
+	end
+
+	local ok, HudManager = pcall(require, script.Parent:WaitForChild("HudManager"))
+	if ok and HudManager then
+		HudManager.ShowNotification(msg, data.destroyed and Color3.fromRGB(255, 80, 80) or Color3.fromRGB(255, 180, 40))
+	end
+end
+
+return RocketAnim</string>
+          </Properties>
+        </Item>
+        <Item class="ModuleScript" referent="19">
+          <Properties>
+            <string name="Name">VisualFX</string>
+            <string name="Source"><![CDATA[-- VisualFX.luau — Визуальные 3D эффекты: всплывающие деньги +$Cash над зданиями
+local TweenService = game:GetService("TweenService")
+local Debris       = game:GetService("Debris")
+
+local VisualFX = {}
+
+function VisualFX.SpawnIncome(pos, amount)
+	local part = Instance.new("Part")
+	part.Size = Vector3.new(0.1, 0.1, 0.1)
+	part.Position = pos
+	part.Anchored = true
+	part.CanCollide = false
+	part.Transparency = 1
+	part.Parent = workspace
+
+	local bb = Instance.new("BillboardGui")
+	bb.Size = UDim2.new(0, 120, 0, 40)
+	bb.StudsOffset = Vector3.new(0, 0, 0)
+	bb.AlwaysOnTop = true
+	bb.Parent = part
+
+	local label = Instance.new("TextLabel")
+	label.Size = UDim2.new(1, 0, 1, 0)
+	label.BackgroundTransparency = 1
+	label.Text = "+$" .. amount
+	label.TextColor3 = Color3.fromRGB(60, 255, 100)
+	label.TextStrokeColor3 = Color3.fromRGB(0, 50, 0)
+	label.TextStrokeTransparency = 0
+	label.TextScaled = true
+	label.Font = Enum.Font.GothamBlack
+	label.Parent = bb
+
+	-- Анимация взлета вверх и растворения
+	local tweenInfo = TweenInfo.new(1.4, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+	local moveTween = TweenService:Create(part, tweenInfo, { Position = pos + Vector3.new(0, 8, 0) })
+	local fadeTween = TweenService:Create(label, tweenInfo, { TextTransparency = 1, TextStrokeTransparency = 1 })
+
+	moveTween:Play()
+	fadeTween:Play()
+
+	Debris:AddItem(part, 1.5)
+end
+
+return VisualFX
+]]></string>
+          </Properties>
+        </Item>
+      </Item>
+    </Item>
+  </Item>
+  <Item class="Workspace" referent="20">
+    <Properties>
+      <string name="Name">Workspace</string>
+      <bool name="FilteringEnabled">true</bool>
+      <bool name="NeedsPivotMigration">false</bool>
+    </Properties>
+  </Item>
+</roblox>

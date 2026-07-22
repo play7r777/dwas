@@ -1,31 +1,33 @@
--- HudManager.luau — весь UI: деньги, ракеты, цели, настройки
-local Players= game:GetService("Players")
+-- HudManager.luau - compact economy, launcher status, and target controls
+local Players           = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local UserInputService  = game:GetService("UserInputService")
-local Remotes           = require(ReplicatedStorage.Shared.Remotes)
-local Config            = require(ReplicatedStorage.Shared.Config)
+local sharedFolder      = ReplicatedStorage:WaitForChild("Shared", 10)
 
-local player= Players.LocalPlayer
+local Remotes           = require(sharedFolder:WaitForChild("Remotes"))
+local Config            = require(sharedFolder:WaitForChild("Config"))
+
+local player = Players.LocalPlayer
 local playerGui = player:WaitForChild("PlayerGui")
 
 local HudManager = {}
 
 local animEnabled = true
-local moneyLabel, rocketLabel, upgradeBtn, buyRocketBtn
-local targetListFrame, targetListLayout
-local notifLabel
-
--- ─── Вспомогательные функции создания UI ──────────────────────────────────
+local moneyLabel, rocketLabel, buyRocketBtn
+local launcherCount = Config.START_LAUNCHERS
+local rocketReady = Config.START_LAUNCHERS
+local targetListFrame
+local notifFrame, notifLabel, notifThread
 
 local function makeFrame(parent, size, pos, color, alpha, name)
 	local f = Instance.new("Frame")
-	f.Name= name or "Frame"
-	f.Size               = size
-	f.Position           = pos
-	f.BackgroundColor3   = color or Color3.fromRGB(30,30,30)
+	f.Name = name or "Frame"
+	f.Size = size
+	f.Position = pos
+	f.BackgroundColor3 = color or Color3.fromRGB(25, 25, 35)
 	f.BackgroundTransparency = alpha or 0.15
-	f.BorderSizePixel    = 0
-	f.Parent             = parent
+	f.BorderSizePixel = 0
+	f.Parent = parent
 	local c = Instance.new("UICorner")
 	c.CornerRadius = UDim.new(0, 8)
 	c.Parent = f
@@ -34,291 +36,221 @@ end
 
 local function makeLabel(parent, text, size, pos, color, fontSize, font)
 	local l = Instance.new("TextLabel")
-	l.Size= size
-	l.Position           = pos
+	l.Size = size
+	l.Position = pos
 	l.BackgroundTransparency = 1
-	l.Text               = text
-	l.TextColor3= color or Color3.fromRGB(255,255,255)
-	l.TextSize           = fontSize or 16
-	l.Font               = font or Enum.Font.GothamMedium
-	l.TextXAlignment     = Enum.TextXAlignment.Left
-	l.Parent             = parent
+	l.Text = text
+	l.TextColor3 = color or Color3.fromRGB(255, 255, 255)
+	l.TextSize = fontSize or 15
+	l.Font = font or Enum.Font.GothamMedium
+	l.TextXAlignment = Enum.TextXAlignment.Left
+	l.Parent = parent
 	return l
 end
 
 local function makeButton(parent, text, size, pos, bgColor, textColor)
 	local b = Instance.new("TextButton")
-	b.Size               = size
-	b.Position           = pos
-	b.BackgroundColor3   = bgColor or Color3.fromRGB(60,120,220)
-	b.BorderSizePixel    = 0
-	b.Text               = text
-	b.TextColor3         = textColor or Color3.fromRGB(255,255,255)
-	b.TextSize           = 15
-	b.Font               = Enum.Font.GothamBold
-	b.AutoButtonColor    = true
-	b.Parent             = parent
+	b.Size = size
+	b.Position = pos
+	b.BackgroundColor3 = bgColor or Color3.fromRGB(50, 120, 220)
+	b.BorderSizePixel = 0
+	b.Text = text
+	b.TextColor3 = textColor or Color3.fromRGB(255, 255, 255)
+	b.TextSize = 14
+	b.Font = Enum.Font.GothamBold
+	b.AutoButtonColor = true
+	b.Parent = parent
 	local c = Instance.new("UICorner")
 	c.CornerRadius = UDim.new(0, 6)
 	c.Parent = b
 	return b
 end
 
--- ─── Уведомление──────────────────────────────────────────────────────────
-
-local function buildNotifGui(screenGui)
-	local frame = makeFrame(screenGui,
-		UDim2.new(0, 340, 0, 50),
-		UDim2.new(0.5, -170, 0, 10),
-		Color3.fromRGB(20,20,20),0.1, "NotifFrame")
-	frame.ZIndex = 10
-	frame.Visible = false
-	local lbl = makeLabel(frame, "",
-		UDim2.new(1,-10,1,0),
-		UDim2.new(0,5,0,0),
-		Color3.fromRGB(255,255,255), 15, Enum.Font.GothamMedium)
-	lbl.TextXAlignment = Enum.TextXAlignment.Center
-	lbl.ZIndex = 11
-	notifLabel = lbl
-	return frame
-end
-
-local notifFrame
-local notifThread
-
 function HudManager.ShowNotification(text, color)
-	if notifLabel then
-		notifLabel.Text      = text
-		notifLabel.TextColor3 = color or Color3.fromRGB(255,255,255)
-		notifFrame.Visible   = true
+	if notifLabel and notifFrame then
+		notifLabel.Text = text
+		notifLabel.TextColor3 = color or Color3.fromRGB(255, 255, 255)
+		notifFrame.Visible = true
 		if notifThread then task.cancel(notifThread) end
-		notifThread = task.delay(4, function()
+		notifThread = task.delay(4.5, function()
 			if notifFrame then notifFrame.Visible = false end
 		end)
 	end
 end
 
--- ─── Список целей ─────────────────────────────────────────────────────────
+local function getPlotForUser(userId)
+	for _, folder in ipairs(workspace:GetChildren()) do
+		if folder:GetAttribute("OwnerUserId") == userId then
+			return folder, folder:GetAttribute("PlotId")
+		end
+	end
+	return nil, nil
+end
 
 local function refreshTargets()
 	if not targetListFrame then return end
-	-- Чистим старые кнопки
-	for _, ch in ipairs(targetListFrame:GetChildren()) do
-		if ch:IsA("TextButton") or ch:IsA("Frame") then ch:Destroy() end
+	for _, child in ipairs(targetListFrame:GetChildren()) do
+		if child:IsA("Frame") or child:IsA("TextButton") then child:Destroy() end
 	end
 
-	for _, p in ipairs(Players:GetPlayers()) do
-		if p == player then continue end
+	for _, targetPlayer in ipairs(Players:GetPlayers()) do
+		if targetPlayer == player then continue end
+		local targetPlotFolder, targetPlotId = getPlotForUser(targetPlayer.UserId)
+		if not targetPlotFolder or not targetPlotId then continue end
 
-		local row = Instance.new("Frame")
-		row.Size             = UDim2.new(1, -8, 0, 36)
-		row.BackgroundColor3 = Color3.fromRGB(50,50,60)
-		row.BackgroundTransparency = 0.2
-		row.BorderSizePixel  = 0
-		row.Parent           = targetListFrame
-		local rc = Instance.new("UICorner")
-		rc.CornerRadius = UDim.new(0,6)
-		rc.Parent = row
+		local activeSlots = {}
+		for slotIndex = 1, #Config.FARM_TYPES do
+			local territory = targetPlotFolder:FindFirstChild("Territory_" .. slotIndex)
+			local home = territory and territory:FindFirstChild("IncomeHome_" .. slotIndex)
+			if home and home:GetAttribute("Alive") ~= false then
+				table.insert(activeSlots, slotIndex)
+			end
+		end
+		if #activeSlots == 0 then continue end
 
-		local nameLbl = makeLabel(row, p.Name,
-			UDim2.new(0.55,0,1,0), UDim2.new(0,6,0,0),
-			Color3.fromRGB(255,255,255), 14)
+		local card = makeFrame(targetListFrame, UDim2.new(1, -8, 0, 32 + #activeSlots * 30), UDim2.new(), Color3.fromRGB(35, 42, 47), 0.08, targetPlayer.Name)
+		makeLabel(card, targetPlayer.DisplayName, UDim2.new(1, -12, 0, 26), UDim2.fromOffset(7, 2), Color3.fromRGB(235, 239, 241), 14, Enum.Font.GothamBold)
+		for rowIndex, slotIndex in ipairs(activeSlots) do
+			local farmConfig = Config.FARM_TYPES[slotIndex]
+			local row = makeFrame(card, UDim2.new(1, -12, 0, 25), UDim2.fromOffset(6, 28 + (rowIndex - 1) * 30), Color3.fromRGB(48, 57, 62), 0, "Target_" .. slotIndex)
+			makeLabel(row, farmConfig.name, UDim2.new(1, -70, 1, 0), UDim2.fromOffset(6, 0), farmConfig.color, 11)
+			local attack = makeButton(row, "Огонь", UDim2.fromOffset(58, 21), UDim2.new(1, -62, 0, 2), Color3.fromRGB(205, 67, 55))
+			attack.TextSize = 11
+			attack.MouseButton1Click:Connect(function()
+				Remotes.Get("LaunchRocket"):FireServer(targetPlotId, slotIndex)
+			end)
+		end
+	end
+end
 
-		local attackBtn = makeButton(row, "🚀 Атака",
-			UDim2.new(0.42,0,0.75,0),
-			UDim2.new(0.56,0,0.12,0),
-			Color3.fromRGB(200,60,60))
+local function setup3DClickTargeting()
+	local mouse = player:GetMouse()
+	UserInputService.InputBegan:Connect(function(input, gpe)
+		if gpe then return end
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			local targetPart = mouse.Target
+			if not targetPart then return end
 
-		-- Определяем plotId цели
-		attackBtn.MouseButton1Click:Connect(function()
-			-- Ищем участок этого игрока по имени папки в Workspace
-			local targetPlotId = nil
-			for _, folder in ipairs(workspace:GetChildren()) do
-				if folder.Name:match("^Plot_") then
-					local sign = folder:FindFirstChild("Sign")
-					if sign then
-						local bb = sign:FindFirstChildOfClass("BillboardGui")
-						if bb then
-							local lbl2 = bb:FindFirstChildOfClass("TextLabel")
-							if lbl2 and lbl2.Text == p.Name then
-								targetPlotId = tonumber(folder.Name:match("%d+"))
-							end
-						end
-					end
+			local home = nil
+			local current = targetPart.Parent
+			while current and current ~= workspace do
+				if current.Name:match("^IncomeHome_") then
+					home = current
+					break
+				end
+				current = current.Parent
+			end
+			if home and home.Name:match("^IncomeHome_") and home:GetAttribute("Alive") ~= false then
+				local slotIndex = tonumber(home.Name:match("%d+"))
+				local territoryFolder = home.Parent
+				local plotFolder = territoryFolder and territoryFolder.Parent
+				local targetPlotId = plotFolder and plotFolder:GetAttribute("PlotId")
+				local ownerUserId = plotFolder and plotFolder:GetAttribute("OwnerUserId")
+				if targetPlotId and ownerUserId and ownerUserId ~= 0 and ownerUserId ~= player.UserId and slotIndex then
+					Remotes.Get("LaunchRocket"):FireServer(targetPlotId, slotIndex)
 				end
 			end
-			if targetPlotId then
-				Remotes.Get("LaunchRocket"):FireServer(targetPlotId)
-			else
-				HudManager.ShowNotification("Участок " .. p.Name .. " не найден!",
-					Color3.fromRGB(200,200,60))
-			end
-		end)
-	end
-end
-
--- ─── Настройки ────────────────────────────────────────────────────────────
-
-local settingsPanel
-local animToggleBtn
-
-local function buildSettings(screenGui)
-	settingsPanel = makeFrame(screenGui,
-		UDim2.new(0, 260, 0, 130),
-		UDim2.new(0.5,-130,0.5,-65),
-		Color3.fromRGB(20,20,30), 0.05, "SettingsPanel")
-	settingsPanel.Visible = false
-	settingsPanel.ZIndex  = 20
-
-	makeLabel(settingsPanel, "⚙️ Настройки",
-		UDim2.new(1,-10,0,30), UDim2.new(0,6,0,4),
-		Color3.fromRGB(255,220,50), 18, Enum.Font.GothamBold)
-
-	local animLabel = makeLabel(settingsPanel, "Анимация ракеты:",
-		UDim2.new(0,150,0,26), UDim2.new(0,10,0,44),
-		Color3.fromRGB(220,220,220), 14)
-
-	animToggleBtn = makeButton(settingsPanel,
-		animEnabled and "✅ Включена" or "❌ Выключена",
-		UDim2.new(0,110,0,28),
-		UDim2.new(0,148,0,42),
-		animEnabled and Color3.fromRGB(40,160,60) or Color3.fromRGB(160,40,40))
-
-	animToggleBtn.MouseButton1Click:Connect(function()
-		animEnabled = not animEnabled
-		animToggleBtn.Text = animEnabled and "✅ Включена" or "❌ Выключена"
-		animToggleBtn.BackgroundColor3 =
-			animEnabled and Color3.fromRGB(40,160,60) or Color3.fromRGB(160,40,40)
-		Remotes.Get("SetAnimSetting"):FireServer(animEnabled)
-	end)
-
-	local hintLabel = makeLabel(settingsPanel,
-		"💡 ЛКМ во время полёта — пропустить",
-		UDim2.new(1,-10,0,20), UDim2.new(0,6,0,80),
-		Color3.fromRGB(160,160,180), 12)
-
-	local closeBtn = makeButton(settingsPanel, "✕",
-		UDim2.new(0,26,0,26), UDim2.new(1,-32,0,4),
-		Color3.fromRGB(160,50,50))
-	closeBtn.MouseButton1Click:Connect(function()
-		settingsPanel.Visible = false
+		end
 	end)
 end
-
--- ─── Главный HUD ──────────────────────────────────────────────────────────
 
 function HudManager.Init(initAnimEnabled)
 	animEnabled = initAnimEnabled ~= false
 
 	local screenGui = Instance.new("ScreenGui")
-	screenGui.Name         = "TycoonHud"
+	screenGui.Name = "TycoonHud"
 	screenGui.ResetOnSpawn = false
 	screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Global
-	screenGui.Parent       = playerGui
+	screenGui.Parent = playerGui
 
-	-- Уведомление (вверху по центру)
-	notifFrame = buildNotifGui(screenGui)
+	notifFrame = makeFrame(screenGui, UDim2.new(0, 360, 0, 50), UDim2.new(0.5, -180, 0, 10), Color3.fromRGB(20, 20, 25), 0.1, "NotifFrame")
+	notifFrame.ZIndex = 20
+	notifFrame.Visible = false
 
-	-- ── Панель ресурсов (верхний левый угол) ──
-	local resPanel = makeFrame(screenGui,
-		UDim2.new(0, 220, 0, 100),
-		UDim2.new(0, 10, 0, 70),
-		Color3.fromRGB(20,20,30), 0.1, "ResPanel")
+	notifLabel = makeLabel(notifFrame, "", UDim2.new(1, -10, 1, 0), UDim2.new(0, 5, 0, 0), Color3.fromRGB(255, 255, 255), 14, Enum.Font.GothamBold)
+	notifLabel.TextXAlignment = Enum.TextXAlignment.Center
 
-	local gameTitle = makeLabel(resPanel, "🏭 Rocket Tycoon",
-		UDim2.new(1,-10,0,24), UDim2.new(0,6,0,4),
-		Color3.fromRGB(255,220,50), 17, Enum.Font.GothamBold)
+	local resPanel = makeFrame(screenGui, UDim2.new(0, 230, 0, 105), UDim2.new(0, 12, 0, 12), Color3.fromRGB(20, 20, 30), 0.1, "ResPanel")
 
-	moneyLabel = makeLabel(resPanel, "💰 Деньги: 0",
-		UDim2.new(1,-10,0,22), UDim2.new(0,6,0,30),
-		Color3.fromRGB(255,220,50), 15)
+	makeLabel(resPanel, "ROCKET ISLANDS", UDim2.new(1, -10, 0, 24), UDim2.new(0, 8, 0, 4), Color3.fromRGB(92, 205, 188), 16, Enum.Font.GothamBold)
 
-	rocketLabel = makeLabel(resPanel, "🚀 Ракеты: 0",
-		UDim2.new(1,-10,0,22), UDim2.new(0,6,0,54),
-		Color3.fromRGB(255,120,80), 15)
+	moneyLabel = makeLabel(resPanel, "Деньги  $0", UDim2.new(1, -10, 0, 22), UDim2.new(0, 8, 0, 32), Color3.fromRGB(255, 214, 90), 15)
+	rocketLabel = makeLabel(resPanel, "Готово  1 / 1", UDim2.new(1, -10, 0, 22), UDim2.new(0, 8, 0, 56), Color3.fromRGB(98, 220, 144), 15)
 
-	-- ── Кнопки действий──
-	local actPanel = makeFrame(screenGui,
-		UDim2.new(0, 220, 0, 100),
-		UDim2.new(0, 10, 0, 178),
-		Color3.fromRGB(20,20,30), 0.1, "ActPanel")
+	local actPanel = makeFrame(screenGui, UDim2.new(0, 230, 0, 55), UDim2.new(0, 12, 0, 125), Color3.fromRGB(20, 20, 30), 0.1, "ActPanel")
 
-	upgradeBtn = makeButton(actPanel, "⬆️ Улучшить ферму",
-		UDim2.new(1,-16,0,36),
-		UDim2.new(0,8,0,8),
-		Color3.fromRGB(60,160,80))
-	upgradeBtn.MouseButton1Click:Connect(function()
-		Remotes.Get("UpgradeFarm"):FireServer()
-	end)
-
-	buyRocketBtn = makeButton(actPanel,
-		"🛒 Купить ракету (" .. Config.ROCKET_COST .. ")",
-		UDim2.new(1,-16,0,36),
-		UDim2.new(0,8,0,52),
-		Color3.fromRGB(180,80,200))
+	buyRocketBtn = makeButton(actPanel, "Установка 2  $" .. Config.LAUNCHER_COSTS[2], UDim2.new(1, -16, 0, 38), UDim2.new(0, 8, 0, 8), Color3.fromRGB(33, 133, 151))
 	buyRocketBtn.MouseButton1Click:Connect(function()
-		Remotes.Get("BuyRocket"):FireServer()
+		Remotes.Get("BuyLauncher"):FireServer()
 	end)
 
-	-- ── Список целей ──
-	local targetPanel = makeFrame(screenGui,
-		UDim2.new(0, 220, 0, 250),
-		UDim2.new(1, -230, 0, 70),
-		Color3.fromRGB(20,20,30), 0.1, "TargetPanel")
+	local targetPanel = makeFrame(screenGui, UDim2.new(0, 260, 0, 380), UDim2.new(1, -272, 0, 12), Color3.fromRGB(20, 20, 30), 0.1, "TargetPanel")
 
-	makeLabel(targetPanel, "🎯 Цели для атаки",
-		UDim2.new(1,-10,0,24), UDim2.new(0,6,0,4),
-		Color3.fromRGB(255,120,80), 16, Enum.Font.GothamBold)
+	makeLabel(targetPanel, "ЦЕЛИ", UDim2.new(1, -10, 0, 26), UDim2.new(0, 8, 0, 4), Color3.fromRGB(236, 108, 91), 16, Enum.Font.GothamBold)
 
 	local scrollFrame = Instance.new("ScrollingFrame")
-	scrollFrame.Size             = UDim2.new(1,-8,1,-36)
-	scrollFrame.Position         = UDim2.new(0,4,0,32)
+	scrollFrame.Size = UDim2.new(1, -10, 1, -36)
+	scrollFrame.Position = UDim2.new(0, 5, 0, 32)
 	scrollFrame.BackgroundTransparency = 1
-	scrollFrame.BorderSizePixel  = 0
-	scrollFrame.ScrollBarThickness = 4
-	scrollFrame.ScrollBarImageColor3 = Color3.fromRGB(120,120,140)
-	scrollFrame.CanvasSize       = UDim2.new(0,0,0,0)
+	scrollFrame.BorderSizePixel = 0
+	scrollFrame.ScrollBarThickness = 5
 	scrollFrame.AutomaticCanvasSize = Enum.AutomaticSize.Y
-	scrollFrame.Parent           = targetPanel
+	scrollFrame.Parent = targetPanel
 
 	local layout = Instance.new("UIListLayout")
-	layout.SortOrder= Enum.SortOrder.LayoutOrder
-	layout.Padding= UDim.new(0,4)
-	layout.Parent     = scrollFrame
+	layout.SortOrder = Enum.SortOrder.LayoutOrder
+	layout.Padding = UDim.new(0, 8)
+	layout.Parent = scrollFrame
 
 	targetListFrame = scrollFrame
 
-	-- Обновляем список при изменении игроков
-	Players.PlayerAdded:Connect(function() task.wait(0.5) refreshTargets() end)
-	Players.PlayerRemoving:Connect(function() task.wait(0.5) refreshTargets() end)
-	task.delay(3, refreshTargets)
+	setup3DClickTargeting()
 
-	-- ── Кнопка настроек ──
-	local settingsBtn = makeButton(screenGui, "⚙️",
-		UDim2.new(0,40,0,40),
-		UDim2.new(1,-52,0,10),
-		Color3.fromRGB(60,60,80))
-	settingsBtn.TextSize = 20
-	settingsBtn.MouseButton1Click:Connect(function()
-		settingsPanel.Visible = not settingsPanel.Visible
+	Players.PlayerAdded:Connect(function() task.wait(1) refreshTargets() end)
+	Players.PlayerRemoving:Connect(function() task.wait(1) refreshTargets() end)
+
+	-- Слушаем изменения зданий для обновления списка целей
+	local buildingState = Remotes.Get("BuildingStateChanged")
+	buildingState.OnClientEvent:Connect(function()
+		task.wait(0.5)
+		refreshTargets()
 	end)
 
-	buildSettings(screenGui)
+	task.delay(1.5, refreshTargets)
+
+	-- Регулярное обновление UI целей на случай если кто-то построился
+	task.spawn(function()
+		while true do
+			task.wait(5)
+			refreshTargets()
+		end
+	end)
 end
 
 function HudManager.UpdateData(data)
-	if moneyLabel  then moneyLabel.Text  = "💰 Деньги:" .. (data.money or 0) end
-	if rocketLabel then rocketLabel.Text = "🚀 Ракеты: " .. (data.rockets or 0) end
-	if data.animEnabled ~= nil then
-		animEnabled = data.animEnabled
-		if animToggleBtn then
-			animToggleBtn.Text = animEnabled and "✅ Включена" or "❌ Выключена"
-			animToggleBtn.BackgroundColor3 =
-				animEnabled and Color3.fromRGB(40,160,60) or Color3.fromRGB(160,40,40)
+	if moneyLabel then moneyLabel.Text = "Деньги  $" .. (data.money or 0) end
+	launcherCount = data.launchers or launcherCount
+	if buyRocketBtn then
+		if launcherCount >= Config.MAX_LAUNCHERS then
+			buyRocketBtn.Text = "Все установки построены"
+			buyRocketBtn.Active = false
+			buyRocketBtn.BackgroundColor3 = Color3.fromRGB(73, 82, 86)
+		else
+			local nextCount = launcherCount + 1
+			buyRocketBtn.Text = string.format("Установка %d  $%d", nextCount, Config.LAUNCHER_COSTS[nextCount])
+			buyRocketBtn.Active = true
+			buyRocketBtn.BackgroundColor3 = Color3.fromRGB(33, 133, 151)
 		end
 	end
-	-- Обновить список целей
-	refreshTargets()
+end
+
+function HudManager.UpdateRocketState(data)
+	launcherCount = data.launchers or launcherCount
+	rocketReady = data.ready or 0
+	if rocketLabel then
+		rocketLabel.Text = string.format("Готово  %d / %d", rocketReady, launcherCount)
+		rocketLabel.TextColor3 = rocketReady > 0 and Color3.fromRGB(98, 220, 144) or Color3.fromRGB(239, 117, 91)
+	end
 end
 
 function HudManager.IsAnimEnabled()

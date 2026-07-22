@@ -1,19 +1,21 @@
--- DataManager.luau — деньги, ракеты, настройка анимации
-local Players= game:GetService("Players")
+-- DataManager.luau - persistent money, launcher count, and player preferences
+local Players          = game:GetService("Players")
 local DataStoreService = game:GetService("DataStoreService")
-local Remotes        = require(game.ReplicatedStorage.Shared.Remotes)
-local Config         = require(game.ReplicatedStorage.Shared.Config)
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local sharedFolder     = ReplicatedStorage:WaitForChild("Shared", 10)
+
+local Remotes          = require(sharedFolder:WaitForChild("Remotes"))
+local Config           = require(sharedFolder:WaitForChild("Config"))
 
 local DataManager = {}
 
--- playerData[userId] = { money, rockets, animEnabled }
 local playerData = {}
 
-local moneyStore = DataStoreService:GetDataStore("TycoonMoney_v1")
-local animStore  = DataStoreService:GetDataStore("TycoonAnim_v1")
+local moneyStore = DataStoreService:GetDataStore("TycoonMoney_v3")
+local animStore  = DataStoreService:GetDataStore("TycoonAnim_v3")
 
 local function defaultData()
-	return { money = Config.START_MONEY, rockets = 0, animEnabled = true }
+	return { money = Config.START_MONEY, launchers = Config.START_LAUNCHERS, animEnabled = true }
 end
 
 local function load(player)
@@ -21,18 +23,20 @@ local function load(player)
 	local ok, saved = pcall(function()
 		return moneyStore:GetAsync(uid)
 	end)
+
 	local data = defaultData()
 	if ok and saved then
-		data.money   = saved.money or data.money
-		data.rockets = saved.rockets or data.rockets
+		data.money = tonumber(saved.money) or data.money
+		data.launchers = math.clamp(tonumber(saved.launchers) or Config.START_LAUNCHERS, Config.START_LAUNCHERS, Config.MAX_LAUNCHERS)
 	end
-	-- Анимация хранится отдельно
+
 	local ok2, animVal = pcall(function()
 		return animStore:GetAsync(uid)
 	end)
 	if ok2 and animVal ~= nil then
 		data.animEnabled = animVal
 	end
+
 	playerData[player] = data
 end
 
@@ -41,7 +45,9 @@ local function save(player)
 	if not data then return end
 	local uid = tostring(player.UserId)
 	pcall(function()
-		moneyStore:SetAsync(uid, { money = data.money, rockets = data.rockets })
+		moneyStore:UpdateAsync(uid, function()
+			return { money = data.money, launchers = data.launchers }
+		end)
 	end)
 	pcall(function()
 		animStore:SetAsync(uid, data.animEnabled)
@@ -51,20 +57,27 @@ end
 function DataManager.Init()
 	Players.PlayerAdded:Connect(function(player)
 		load(player)
-		--Ждём немного, пока клиент загрузится, потом шлём данные
-		task.delay(2, function()
+		task.delay(1, function()
 			if player and player.Parent then
 				DataManager.SendUpdate(player)
 			end
 		end)
 	end)
 
+	for _, player in ipairs(Players:GetPlayers()) do
+		load(player)
+		task.delay(1, function()
+			if player and player.Parent then
+				DataManager.SendUpdate(player)
+			end
+		end)
+	end
+
 	Players.PlayerRemoving:Connect(function(player)
 		save(player)
 		playerData[player] = nil
 	end)
 
-	-- Настройка анимации
 	local setAnim = Remotes.Get("SetAnimSetting")
 	setAnim.OnServerEvent:Connect(function(player, enabled)
 		local data = playerData[player]
@@ -82,37 +95,41 @@ function DataManager.Init()
 		return data and data.animEnabled ~= false
 	end
 
-	-- Покупка ракеты
-	local buyRocket = Remotes.Get("BuyRocket")
-	buyRocket.OnServerEvent:Connect(function(player)
-		local data = playerData[player]
-		if not data then return end
-		if data.money >= Config.ROCKET_COST then
-			data.money= data.money - Config.ROCKET_COST
-			data.rockets = data.rockets + 1
-			DataManager.SendUpdate(player)
-		end
-	end)
 end
 
 function DataManager.GetData(player)
 	return playerData[player]
 end
 
+function DataManager.GetMoney(player)
+	local data = playerData[player]
+	return data and data.money or 0
+end
+
 function DataManager.AddMoney(player, amount)
 	local data = playerData[player]
 	if data then
-		data.money = data.money + amount
+		data.money = math.max(0, data.money + amount)
 		DataManager.SendUpdate(player)
 	end
 end
 
-function DataManager.UseRocket(player)
+function DataManager.GetLauncherCount(player)
 	local data = playerData[player]
-	if not data or data.rockets <= 0 then return false end
-	data.rockets = data.rockets - 1
+	return data and data.launchers or 0
+end
+
+function DataManager.BuyNextLauncher(player)
+	local data = playerData[player]
+	if not data then return false, "Данные игрока загружаются" end
+	if data.launchers >= Config.MAX_LAUNCHERS then return false, "Все 6 установок уже построены" end
+	local nextCount = data.launchers + 1
+	local cost = Config.LAUNCHER_COSTS[nextCount]
+	if data.money < cost then return false, string.format("Нужно ещё $%d", cost - data.money) end
+	data.money -= cost
+	data.launchers = nextCount
 	DataManager.SendUpdate(player)
-	return true
+	return true, nextCount
 end
 
 function DataManager.SendUpdate(player)
@@ -120,9 +137,10 @@ function DataManager.SendUpdate(player)
 	if not data then return end
 	local ev = Remotes.Get("UpdateData")
 	ev:FireClient(player, {
-		money        = data.money,
-		rockets      = data.rockets,
-		animEnabled  = data.animEnabled,})
+		money = data.money,
+		launchers = data.launchers,
+		animEnabled = data.animEnabled,
+	})
 end
 
 return DataManager
