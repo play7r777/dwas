@@ -22,6 +22,16 @@ Config.ROCKET_SPEED = 115
 Config.ROCKET_ANIM_TIME = 3.2
 Config.ROCKET_ARC = 95
 
+-- Прокачка зданий: каждое здание можно улучшать до MAX_BUILDING_LEVEL.
+-- Стоимость следующего уровня = базовая цена * UPGRADE_COST_MULT^(текущий уровень),
+-- доход здания = базовый доход * уровень.
+Config.MAX_BUILDING_LEVEL = 10
+Config.UPGRADE_COST_MULT = 1.6
+
+-- Запуск ракеты игроком: ProximityPrompt "Запустить" на ракете (зажать E).
+Config.LAUNCH_PROMPT_ACTION = "Запустить"
+Config.LAUNCH_PROMPT_HOLD = 0.5
+
 Config.FARM_TYPES = {
 	[1] = {
 		name = "Пляжный дом",
@@ -94,6 +104,21 @@ Config.SLOT_OFFSETS = {
 	[4] = Vector3.new(-radius * math.cos(math.rad(-54)), 0, radius * math.sin(math.rad(54))),
 	[5] = Vector3.new(-radius * math.cos(math.rad(18)), 0, -radius * math.sin(math.rad(18))),
 }
+
+-- Стоимость улучшения здания слота до уровня nextLevel (nextLevel >= 2).
+function Config.UpgradeCost(tier, nextLevel)
+	local base = Config.FARM_TYPES[tier]
+	if not base then return math.huge end
+	-- цена растёт геометрически: base.cost * mult^(nextLevel-1)
+	return math.floor(base.cost * (Config.UPGRADE_COST_MULT ^ (nextLevel - 1)) + 0.5)
+end
+
+-- Доход здания слота на заданном уровне.
+function Config.IncomeForLevel(tier, level)
+	local base = Config.FARM_TYPES[tier]
+	if not base then return 0 end
+	return base.income * level
+end
 
 Config.SILO_OFFSET = Vector3.new(0, 0, 0)
 Config.LAUNCHER_OFFSETS = {

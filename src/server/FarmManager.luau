@@ -75,11 +75,16 @@ local function buildTerritory(plotId, slotIndex)
 	return territoryFolder
 end
 
--- Уникальные 3D модели зданий
-local function buildBuildingModel(plotId, slotIndex, tier, territoryFolder)
+-- Уникальные 3D модели зданий. baseCF ставит дом фасадом (входом) к центру острова,
+-- чтобы дом не стоял "задом" к своему острову (фикс ориентации красного дома).
+local function buildBuildingModel(plotId, slotIndex, tier, level, territoryFolder)
 	local plot = PlotManager.GetPlot(plotId)
-	local center = plot.slots[slotIndex].center + Vector3.new(0, 10, 0)
+	local slotCenter = plot.slots[slotIndex].center + Vector3.new(0, 10, 0)
+	-- Дверь/фасад дома смотрит по локальной -Z; направляем -Z на центр острова (к мосту).
+	local baseCF = CFrame.lookAt(slotCenter, Vector3.new(plot.center.X, slotCenter.Y, plot.center.Z))
+
 	local config = Config.FARM_TYPES[tier]
+	local income = Config.IncomeForLevel(tier, level)
 	local home = Instance.new("Model")
 	home.Name = "IncomeHome_" .. slotIndex
 	home:SetAttribute("Alive", true)
@@ -97,12 +102,15 @@ local function buildBuildingModel(plotId, slotIndex, tier, territoryFolder)
 	local depth = 14 + tier * 2
 	local wallHeight = 9 + tier
 
-	local function part(name, size, cframe, color, material)
+	-- lp — все смещения ЛОКАЛЬНЫЕ относительно пола дома (baseCF), пол на локальном y=0.
+	local function lp(name, size, dx, dy, dz, color, material, angles)
+		local cf = baseCF * CFrame.new(dx, dy, dz)
+		if angles then cf = cf * angles end
 		local instance = Instance.new("Part")
 		instance.Name = name
 		instance.Anchored = true
 		instance.Size = size
-		instance.CFrame = cframe
+		instance.CFrame = cf
 		instance.Color = color
 		instance.Material = material
 		instance.TopSurface = Enum.SurfaceType.Smooth
@@ -111,55 +119,56 @@ local function buildBuildingModel(plotId, slotIndex, tier, territoryFolder)
 		return instance
 	end
 
-	local floor = part("Floor", Vector3.new(width, 1, depth), CFrame.new(center), Color3.fromRGB(126, 91, 54), Enum.Material.WoodPlanks)
-	local wallY = center.Y + wallHeight / 2 + 0.5
-	part("BackWall", Vector3.new(width, wallHeight, 1), CFrame.new(center + Vector3.new(0, wallY - center.Y, depth / 2)), palette.wall, Enum.Material.Plaster)
-	part("LeftWall", Vector3.new(1, wallHeight, depth), CFrame.new(center + Vector3.new(-width / 2, wallY - center.Y, 0)), palette.wall, Enum.Material.Plaster)
-	part("RightWall", Vector3.new(1, wallHeight, depth), CFrame.new(center + Vector3.new(width / 2, wallY - center.Y, 0)), palette.wall, Enum.Material.Plaster)
+	local wallY = wallHeight / 2 + 0.5   -- ЛОКАЛЬНАЯ высота центра стен
+	local roofY = wallHeight + 2          -- ЛОКАЛЬНАЯ высота конька крыши (сидит на стенах)
 
-	-- The front is split around a real door opening, so players can walk inside.
+	lp("Floor", Vector3.new(width, 1, depth), 0, 0, 0, Color3.fromRGB(126, 91, 54), Enum.Material.WoodPlanks)
+	lp("BackWall", Vector3.new(width, wallHeight, 1), 0, wallY, depth / 2, palette.wall, Enum.Material.Plaster)
+	lp("LeftWall", Vector3.new(1, wallHeight, depth), -width / 2, wallY, 0, palette.wall, Enum.Material.Plaster)
+	lp("RightWall", Vector3.new(1, wallHeight, depth), width / 2, wallY, 0, palette.wall, Enum.Material.Plaster)
+
+	-- Фасад со сквозным дверным проёмом.
 	local sideWidth = (width - 5) / 2
-	part("FrontWallLeft", Vector3.new(sideWidth, wallHeight, 1), CFrame.new(center + Vector3.new(-(5 + sideWidth) / 2, wallY - center.Y, -depth / 2)), palette.wall, Enum.Material.Plaster)
-	part("FrontWallRight", Vector3.new(sideWidth, wallHeight, 1), CFrame.new(center + Vector3.new((5 + sideWidth) / 2, wallY - center.Y, -depth / 2)), palette.wall, Enum.Material.Plaster)
-	part("DoorHeader", Vector3.new(5, 2.4, 1), CFrame.new(center + Vector3.new(0, wallHeight - 0.7, -depth / 2)), palette.trim, Enum.Material.Wood)
+	lp("FrontWallLeft", Vector3.new(sideWidth, wallHeight, 1), -(5 + sideWidth) / 2, wallY, -depth / 2, palette.wall, Enum.Material.Plaster)
+	lp("FrontWallRight", Vector3.new(sideWidth, wallHeight, 1), (5 + sideWidth) / 2, wallY, -depth / 2, palette.wall, Enum.Material.Plaster)
+	lp("DoorHeader", Vector3.new(5, 2.4, 1), 0, wallHeight - 0.7, -depth / 2, palette.trim, Enum.Material.Wood)
 
-	local roofY = center.Y + wallHeight + 2
-	local roofLeft = part("RoofLeft", Vector3.new(width / 2 + 1, 1, depth + 2), CFrame.new(center + Vector3.new(-width / 4, roofY, 0)) * CFrame.Angles(0, 0, math.rad(-24)), palette.roof, Enum.Material.Slate)
-	local roofRight = part("RoofRight", Vector3.new(width / 2 + 1, 1, depth + 2), CFrame.new(center + Vector3.new(width / 4, roofY, 0)) * CFrame.Angles(0, 0, math.rad(24)), palette.roof, Enum.Material.Slate)
-	part("Chimney", Vector3.new(2.2, 7, 2.2), CFrame.new(center + Vector3.new(width * 0.27, roofY + 3, 2)), Color3.fromRGB(92, 80, 71), Enum.Material.Brick)
+	local roofLeft = lp("RoofLeft", Vector3.new(width / 2 + 1, 1, depth + 2), -width / 4, roofY, 0, palette.roof, Enum.Material.Slate, CFrame.Angles(0, 0, math.rad(-24)))
+	lp("RoofRight", Vector3.new(width / 2 + 1, 1, depth + 2), width / 4, roofY, 0, palette.roof, Enum.Material.Slate, CFrame.Angles(0, 0, math.rad(24)))
+	lp("Chimney", Vector3.new(2.2, 7, 2.2), width * 0.27, roofY + 3, 2, Color3.fromRGB(92, 80, 71), Enum.Material.Brick)
 
 	for _, side in ipairs({ -1, 1 }) do
 		for _, z in ipairs({ -depth * 0.22, depth * 0.22 }) do
-			local window = part("Window", Vector3.new(0.25, 3.2, 3.4), CFrame.new(center + Vector3.new(side * (width / 2 + 0.52), wallY, z)), Color3.fromRGB(133, 210, 226), Enum.Material.Glass)
+			local window = lp("Window", Vector3.new(0.25, 3.2, 3.4), side * (width / 2 + 0.52), wallY, z, Color3.fromRGB(133, 210, 226), Enum.Material.Glass)
 			window.Transparency = 0.25
 		end
 	end
 
-	local porch = part("Porch", Vector3.new(7, 0.7, 5), CFrame.new(center + Vector3.new(0, 0.25, -depth / 2 - 2.5)), Color3.fromRGB(128, 89, 50), Enum.Material.WoodPlanks)
+	lp("Porch", Vector3.new(7, 0.7, 5), 0, 0.25, -depth / 2 - 2.5, Color3.fromRGB(128, 89, 50), Enum.Material.WoodPlanks)
 	for _, x in ipairs({ -2.8, 2.8 }) do
-		part("PorchPost", Vector3.new(0.7, 5, 0.7), CFrame.new(center + Vector3.new(x, 2.7, -depth / 2 - 4.3)), palette.trim, Enum.Material.Wood)
+		lp("PorchPost", Vector3.new(0.7, 5, 0.7), x, 2.7, -depth / 2 - 4.3, palette.trim, Enum.Material.Wood)
 	end
-	part("PorchRoof", Vector3.new(8, 0.7, 3), CFrame.new(center + Vector3.new(0, 5.4, -depth / 2 - 3.2)) * CFrame.Angles(math.rad(8), 0, 0), palette.roof, Enum.Material.Slate)
+	lp("PorchRoof", Vector3.new(8, 0.7, 3), 0, 5.4, -depth / 2 - 3.2, palette.roof, Enum.Material.Slate, CFrame.Angles(math.rad(8), 0, 0))
 
 	if tier >= 3 then
-		part("SideRoom", Vector3.new(7, 7, 7), CFrame.new(center + Vector3.new(width / 2 + 3.5, 4, depth * 0.18)), palette.wall, Enum.Material.Plaster)
-		part("SideRoof", Vector3.new(9, 1, 9), CFrame.new(center + Vector3.new(width / 2 + 3.5, 8.5, depth * 0.18)) * CFrame.Angles(0, 0, math.rad(18)), palette.roof, Enum.Material.Slate)
+		lp("SideRoom", Vector3.new(7, 7, 7), width / 2 + 3.5, 4, depth * 0.18, palette.wall, Enum.Material.Plaster)
+		lp("SideRoof", Vector3.new(9, 1, 9), width / 2 + 3.5, 8.5, depth * 0.18, palette.roof, Enum.Material.Slate, CFrame.Angles(0, 0, math.rad(18)))
 	end
 	if tier >= 4 then
-		local balcony = part("Balcony", Vector3.new(7, 0.6, 4), CFrame.new(center + Vector3.new(0, wallHeight * 0.63, depth / 2 + 2)), palette.trim, Enum.Material.WoodPlanks)
+		local balcony = lp("Balcony", Vector3.new(7, 0.6, 4), 0, wallHeight * 0.63, depth / 2 + 2, palette.trim, Enum.Material.WoodPlanks)
 		balcony.CanCollide = true
 	end
 
 	local gui = Instance.new("BillboardGui")
 	gui.Name = "StatusGui"
-	gui.Size = UDim2.new(0, 130, 0, 28)
+	gui.Size = UDim2.new(0, 150, 0, 30)
 	gui.StudsOffset = Vector3.new(0, wallHeight + 5, 0)
 	gui.AlwaysOnTop = false
 	gui.Parent = roofLeft
 	local statusLabel = Instance.new("TextLabel")
 	statusLabel.Size = UDim2.new(1, 0, 1, 0)
 	statusLabel.BackgroundTransparency = 1
-	statusLabel.Text = "+$" .. config.income
+	statusLabel.Text = string.format("ур.%d  +$%d", level, income)
 	statusLabel.TextColor3 = Color3.fromRGB(129, 255, 161)
 	statusLabel.TextStrokeTransparency = 0.55
 	statusLabel.TextScaled = true
@@ -366,7 +375,34 @@ local function buildLegacyBuildingModel(plotId, slotIndex, tier, territoryFolder
 	return farmFolder, mainBody, hpBar, statusLabel
 end
 
-local function spawnBuilding(plotId, slotIndex, tier)
+-- Обновляет ценник над кнопкой: покупка / прокачка до след. уровня / макс.
+local function updatePriceTag(plotId, slotIndex)
+	local plot = PlotManager.GetPlot(plotId)
+	local slot = plot and plot.slots[slotIndex]
+	if not slot or not slot.priceLabel then return end
+	local base = Config.FARM_TYPES[slotIndex]
+	local data = plotFarms[plotId] and plotFarms[plotId][slotIndex]
+
+	if not data then
+		slot.priceLabel.Text = string.format("%s\n$%d", base.name, base.cost)
+		slot.priceLabel.TextColor3 = Color3.fromRGB(190, 255, 200)
+	elseif data.level >= Config.MAX_BUILDING_LEVEL then
+		slot.priceLabel.Text = string.format("%s (ур.%d)\nМакс. уровень", base.name, data.level)
+		slot.priceLabel.TextColor3 = Color3.fromRGB(255, 224, 130)
+	else
+		local cost = Config.UpgradeCost(slotIndex, data.level + 1)
+		slot.priceLabel.Text = string.format("Прокачка до ур.%d\n$%d", data.level + 1, cost)
+		slot.priceLabel.TextColor3 = Color3.fromRGB(190, 235, 255)
+	end
+end
+
+-- Прочность здания растёт с уровнем.
+local function maxHpForLevel(tier, level)
+	local base = Config.FARM_TYPES[tier]
+	return math.floor(base.maxHp * (1 + 0.35 * (level - 1)))
+end
+
+local function spawnBuilding(plotId, slotIndex, level)
 	if not plotFarms[plotId] then plotFarms[plotId] = {} end
 
 	local oldData = plotFarms[plotId][slotIndex]
@@ -375,6 +411,7 @@ local function spawnBuilding(plotId, slotIndex, tier)
 	end
 
 	local plot = PlotManager.GetPlot(plotId)
+	local tier = slotIndex -- слот N соответствует зданию тира N
 
 	-- Если территории еще нет, строим её
 	local territoryFolder = plot.folder:FindFirstChild("Territory_" .. slotIndex)
@@ -382,27 +419,25 @@ local function spawnBuilding(plotId, slotIndex, tier)
 		territoryFolder = buildTerritory(plotId, slotIndex)
 	end
 
-	local farmConfig = Config.FARM_TYPES[tier]
-	local folder, body, hpBar, statusLabel = buildBuildingModel(plotId, slotIndex, tier, territoryFolder)
+	local maxHp = maxHpForLevel(tier, level)
+	local folder, body, hpBar, statusLabel = buildBuildingModel(plotId, slotIndex, tier, level, territoryFolder)
 
-	if plot and plot.slots[slotIndex] then
-		plot.slots[slotIndex].buyPad.Transparency = 1
-		plot.slots[slotIndex].buyPad.CanCollide = false
-		plot.slots[slotIndex].buyPrompt.Enabled = false
-	end
+	-- Кнопка НЕ исчезает — она остаётся кнопкой прокачки этого здания.
+	updatePriceTag(plotId, slotIndex)
 
-	-- Активация кнопки СЛЕДУЮЩЕГО слота (последовательная прокачка)
+	-- Активация кнопки СЛЕДУЮЩЕГО слота (последовательное открытие)
 	local nextSlot = slotIndex + 1
 	if plot and plot.slots[nextSlot] and not (plotFarms[plotId] and plotFarms[plotId][nextSlot]) then
 		plot.slots[nextSlot].buyPad.Transparency = 0
 		plot.slots[nextSlot].buyPad.CanCollide = true
-		plot.slots[nextSlot].buyPrompt.Enabled = true
+		if plot.slots[nextSlot].billboard then plot.slots[nextSlot].billboard.Enabled = true end
 	end
 
 	plotFarms[plotId][slotIndex] = {
 		tier = tier,
-		hp = farmConfig.maxHp,
-		maxHp = farmConfig.maxHp,
+		level = level,
+		hp = maxHp,
+		maxHp = maxHp,
 		alive = true,
 		folder = folder,
 		body = body,
@@ -413,34 +448,46 @@ local function spawnBuilding(plotId, slotIndex, tier)
 
 	Remotes.Get("BuildingStateChanged"):FireAllClients(plotId, slotIndex, {
 		tier = tier,
-		hp = farmConfig.maxHp,
-		maxHp = farmConfig.maxHp,
+		level = level,
+		hp = maxHp,
+		maxHp = maxHp,
 		alive = true,
 		rebuildTimer = 0,
 	})
 end
 
-function FarmManager.BuySlot(player, slotIndex)
+-- Наступание на кнопку: покупка (если пусто) или прокачка (если уже построено).
+function FarmManager.BuyOrUpgrade(player, slotIndex)
 	local plotId = select(1, PlotManager.GetPlotByPlayer(player))
 	if not plotId then return end
+	local base = Config.FARM_TYPES[slotIndex]
+	if not base then return end
+	if not plotFarms[plotId] then plotFarms[plotId] = {} end
 
-	-- Проверка последовательности прокачки: можно купить слот N, только если есть слот N-1
-	if slotIndex > 1 and (not plotFarms[plotId] or not plotFarms[plotId][slotIndex - 1]) then
-		return
+	local data = plotFarms[plotId][slotIndex]
+	if not data then
+		-- ПОКУПКА (уровень 1). Слот N доступен, только если построен слот N-1.
+		if slotIndex > 1 and not plotFarms[plotId][slotIndex - 1] then return end
+		if DataManager.GetMoney(player) < base.cost then return end
+		DataManager.AddMoney(player, -base.cost)
+		spawnBuilding(plotId, slotIndex, 1)
+		print(string.format("[FarmManager] %s построил %s (ур.1)", player.Name, base.name))
+	else
+		-- ПРОКАЧКА до следующего уровня.
+		if not data.alive then return end
+		if data.level >= Config.MAX_BUILDING_LEVEL then return end
+		local nextLevel = data.level + 1
+		local cost = Config.UpgradeCost(slotIndex, nextLevel)
+		if DataManager.GetMoney(player) < cost then return end
+		DataManager.AddMoney(player, -cost)
+		spawnBuilding(plotId, slotIndex, nextLevel)
+		print(string.format("[FarmManager] %s прокачал %s до ур.%d", player.Name, base.name, nextLevel))
 	end
+end
 
-	local farmConfig = Config.FARM_TYPES[slotIndex]
-	if not farmConfig then return end
-
-	local currentData = plotFarms[plotId] and plotFarms[plotId][slotIndex]
-	if currentData then return end
-
-	local playerMoney = DataManager.GetMoney(player)
-	if playerMoney >= farmConfig.cost then
-		DataManager.AddMoney(player, -farmConfig.cost)
-		spawnBuilding(plotId, slotIndex, slotIndex)
-		print(string.format("[FarmManager] %s открыл новую территорию и построил %s!", player.Name, farmConfig.name))
-	end
+-- Совместимость со старым именем/ремоутом.
+function FarmManager.BuySlot(player, slotIndex)
+	FarmManager.BuyOrUpgrade(player, slotIndex)
 end
 
 local function destroyBuilding(plotId, slotIndex)
@@ -484,25 +531,26 @@ local function destroyBuilding(plotId, slotIndex)
 
 		local plot = PlotManager.GetPlot(plotId)
 		if plot and plot.owner then
-			spawnBuilding(plotId, slotIndex, slotData.tier)
+			spawnBuilding(plotId, slotIndex, slotData.level or 1)
 			print(string.format("[FarmManager] Остров #%d Слот #%d заново восстановлен!", plotId, slotIndex))
 		end
 	end)
 end
 
+local buyDebounce = {}
+
 function FarmManager.Init()
 	for plotId, plot in pairs(PlotManager.GetAllPlots()) do
 		for slotIdx, slotInfo in ipairs(plot.slots) do
+			-- Покупка/прокачка по НАСТУПАНИЮ на кнопку (с дебаунсом ~1с и проверкой владельца).
 			slotInfo.buyPad.Touched:Connect(function(hit)
 				local player = Players:GetPlayerFromCharacter(hit.Parent)
-				if player and plot.owner == player then
-					FarmManager.BuySlot(player, slotIdx)
-				end
-			end)
-			slotInfo.buyPrompt.Triggered:Connect(function(player)
-				if plot.owner == player then
-					FarmManager.BuySlot(player, slotIdx)
-				end
+				if not player or plot.owner ~= player then return end
+				local key = string.format("%d:%d:%d", player.UserId, plotId, slotIdx)
+				local now = os.clock()
+				if buyDebounce[key] and now - buyDebounce[key] < 1 then return end
+				buyDebounce[key] = now
+				FarmManager.BuyOrUpgrade(player, slotIdx)
 			end)
 		end
 	end
@@ -525,7 +573,7 @@ function FarmManager.Init()
 			if plot and plot.slots[1] then
 				plot.slots[1].buyPad.Transparency = 0
 				plot.slots[1].buyPad.CanCollide = true
-				plot.slots[1].buyPrompt.Enabled = true
+				if plot.slots[1].billboard then plot.slots[1].billboard.Enabled = true end
 			end
 		end
 	end)
@@ -550,10 +598,12 @@ function FarmManager.Init()
 						if slotData and slotData.alive then
 							local farmConfig = Config.FARM_TYPES[slotData.tier]
 							if farmConfig then
-								DataManager.AddMoney(player, farmConfig.income)
+								-- Доход растёт с уровнем здания.
+								local income = Config.IncomeForLevel(slotData.tier, slotData.level or 1)
+								DataManager.AddMoney(player, income)
 								local plot = PlotManager.GetPlot(plotId)
 								if plot and plot.slots[slotIdx] then
-									Remotes.Get("SpawnIncomeFX"):FireClient(player, plot.slots[slotIdx].center + Vector3.new(0, 10, 0), farmConfig.income)
+									Remotes.Get("SpawnIncomeFX"):FireClient(player, plot.slots[slotIdx].center + Vector3.new(0, 10, 0), income)
 								end
 							end
 						end

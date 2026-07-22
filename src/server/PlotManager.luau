@@ -19,12 +19,35 @@ local PLOT_THEME_COLORS = {
 	Color3.fromRGB(40, 210, 210),
 }
 
+-- Высота ходибельной песчаной поверхности острова над Y центра плота.
+-- Все объекты (спавн, кнопки, ракеты, пальмы) выравниваются по этой высоте.
+local ISLAND_SURFACE_OFFSET = 10
+
 local function makePart(parent, name, size, cframe, color, material)
 	local part = Instance.new("Part")
 	part.Name = name
 	part.Anchored = true
 	part.Size = size
 	part.CFrame = cframe
+	part.Color = color
+	part.Material = material
+	part.TopSurface = Enum.SurfaceType.Smooth
+	part.BottomSurface = Enum.SurfaceType.Smooth
+	part.Parent = parent
+	return part
+end
+
+-- Вертикальный сплошной цилиндр-диск (ось цилиндра направлена вверх по Y).
+-- Слои острова делаем сплошными непересекающимися дисками — это убирает
+-- z-fighting «плывущего песка», который был из-за десятков наложенных партов.
+local function makeDisc(parent, name, radius, thickness, centerY, worldXZ, color, material)
+	local part = Instance.new("Part")
+	part.Name = name
+	part.Anchored = true
+	part.Shape = Enum.PartType.Cylinder
+	part.Size = Vector3.new(thickness, radius * 2, radius * 2)
+	-- ось цилиндра (локальный X) поворачиваем в вертикаль
+	part.CFrame = CFrame.new(worldXZ.X, centerY, worldXZ.Z) * CFrame.Angles(0, 0, math.rad(90))
 	part.Color = color
 	part.Material = material
 	part.TopSurface = Enum.SurfaceType.Smooth
@@ -92,53 +115,165 @@ local function buildOcean()
 	end
 end
 
-local ISLAND_PATTERNS = {
-	{ Vector2.new(-0.52, -0.18), Vector2.new(-0.35, -0.58), Vector2.new(0.14, -0.65), Vector2.new(0.62, -0.28), Vector2.new(0.52, 0.31), Vector2.new(0.12, 0.57), Vector2.new(-0.46, 0.45), Vector2.new(-0.68, 0.08) },
-	{ Vector2.new(-0.62, -0.08), Vector2.new(-0.27, -0.52), Vector2.new(0.32, -0.46), Vector2.new(0.67, -0.05), Vector2.new(0.35, 0.56), Vector2.new(-0.22, 0.62), Vector2.new(-0.6, 0.32) },
-	{ Vector2.new(-0.58, -0.35), Vector2.new(-0.08, -0.66), Vector2.new(0.5, -0.45), Vector2.new(0.63, 0.2), Vector2.new(0.25, 0.63), Vector2.new(-0.35, 0.52), Vector2.new(-0.67, 0.15) },
-	{ Vector2.new(-0.68, -0.12), Vector2.new(-0.35, -0.6), Vector2.new(0.2, -0.55), Vector2.new(0.63, -0.18), Vector2.new(0.58, 0.38), Vector2.new(0.02, 0.61), Vector2.new(-0.55, 0.4) },
-}
+-- Вспомогательные конструкторы для цилиндров и клиньев
+local function makeCylinder(parent, name, height, diameter, position, color, material)
+	-- Цилиндр в Roblox лежит вдоль локальной оси X; поворотом на 90° по Z ставим вертикально.
+	local part = makePart(parent, name, Vector3.new(height, diameter, diameter), CFrame.new(position) * CFrame.Angles(0, 0, math.rad(90)), color, material)
+	part.Shape = Enum.PartType.Cylinder
+	return part
+end
 
-local function makeIslandLayer(parent, name, position, points, y, thickness, scale, color, material)
+local function makeWedge(parent, name, size, cframe, color, material)
+	local part = Instance.new("WedgePart")
+	part.Name = name
+	part.Anchored = true
+	part.Size = size
+	part.CFrame = cframe
+	part.Color = color
+	part.Material = material
+	part.TopSurface = Enum.SurfaceType.Smooth
+	part.BottomSurface = Enum.SurfaceType.Smooth
+	part.Parent = parent
+	return part
+end
+
+-- Высота верхней грани песка над position.Y. Общая точка отсчёта для спавна,
+-- кнопок, ракет и пальм, чтобы всё стояло ровно на поверхности.
+local SURFACE_OFFSET = 10
+
+-- Остров = набор ВЛОЖЕННЫХ сплошных цилиндров с верхними гранями на РАЗНОЙ высоте.
+-- Никаких перекрывающихся копланарных партов → нет "плавающего/дрожащего песка" (z-fighting).
+local function buildIslandBase(folder, position, sandColor)
+	local scale = Config.PLOT_CENTER_SIZE
+	local sandRadius = scale * 0.64
+
+	-- Подводный риф (самый широкий, спрятан под каменным шельфом)
+	makeCylinder(folder, "SubmergedReef", 20, (sandRadius * 2.3) + 12, position + Vector3.new(0, -20, 0), Color3.fromRGB(52, 73, 78), Enum.Material.Slate)
+	-- Каменный шельф (верх +4 относительно position.Y)
+	makeCylinder(folder, "RockShelf", 16, sandRadius * 2.14, position + Vector3.new(0, -4, 0), Color3.fromRGB(92, 87, 75), Enum.Material.Rock)
+	-- Песчаная поверхность единым партом (верх = position.Y + SURFACE_OFFSET)
+	local sand = makeCylinder(folder, "SandShore", 8, sandRadius * 2, position + Vector3.new(0, SURFACE_OFFSET - 4, 0), sandColor, Enum.Material.Sand)
+
+	return sand, sandRadius
+end
+
+-- Большая красивая пальма: изогнутый ствол из сегментов-цилиндров, крона из листьев и кокосы.
+local function buildPalm(parent, basePos, yawDeg, scale)
 	local model = Instance.new("Model")
-	model.Name = name
+	model.Name = "Palm"
 	model.Parent = parent
-	local hub = makePart(model, "Hub", Vector3.new(2, thickness, 2), CFrame.new(position + Vector3.new(0, y, 0)), color, material)
-	hub.Transparency = 1
-	hub.CanCollide = false
-	model.PrimaryPart = hub
 
-	for index, point in ipairs(points) do
-		local nextPoint = points[index % #points + 1]
-		local a = position + Vector3.new(point.X * scale, y, point.Y * scale)
-		local b = position + Vector3.new(nextPoint.X * scale, y, nextPoint.Y * scale)
-		local segment = b - a
-		local length = segment.Magnitude
-		local part = makePart(model, "Shore_" .. index, Vector3.new(scale * 0.78, thickness, length + scale * 0.28), CFrame.lookAt((a + b) / 2, b), color, material)
-		part.Orientation = Vector3.new(0, part.Orientation.Y, 0)
+	local segCount = math.random(4, 6)
+	local segLen = 3.1 * scale
+	local dia = 1.7 * scale
+	local trunkColor = Color3.fromRGB(111, 77, 43)
+	local lean = math.rad(6) -- лёгкий изгиб ствола сегмент за сегментом
+
+	local growth = CFrame.new(basePos) * CFrame.Angles(0, math.rad(yawDeg), 0)
+	for i = 1, segCount do
+		local d = dia * (1 - (i - 1) * 0.09)
+		local centerCF = growth * CFrame.new(0, segLen / 2, 0)
+		local seg = makePart(model, "Trunk_" .. i, Vector3.new(segLen + 0.35, d, d), centerCF * CFrame.Angles(0, 0, math.rad(90)), trunkColor, Enum.Material.Wood)
+		seg.Shape = Enum.PartType.Cylinder
+		growth = growth * CFrame.new(0, segLen, 0) * CFrame.Angles(lean, 0, 0)
 	end
+
+	local crownPos = growth.Position
+
+	-- 6-8 больших изогнутых листьев, наклонённых вниз от вершины
+	local leaves = math.random(6, 8)
+	local leafLen = 11 * scale
+	for i = 1, leaves do
+		local leafAngle = math.rad((360 / leaves) * i)
+		local droop = -math.rad(26 + math.random(0, 14))
+		local leafCF = CFrame.new(crownPos)
+			* CFrame.Angles(0, leafAngle, 0)
+			* CFrame.Angles(droop, 0, 0)
+			* CFrame.new(0, 0, -leafLen / 2)
+		local leaf = makePart(model, "Leaf_" .. i, Vector3.new(2.7 * scale, 0.4, leafLen), leafCF, Color3.fromRGB(53, 133, 71), Enum.Material.Grass)
+		leaf.CanCollide = false
+	end
+
+	-- Плотная зелёная шапка в центре кроны
+	local cap = makePart(model, "Crown", Vector3.new(2.6 * scale, 2 * scale, 2.6 * scale), CFrame.new(crownPos), Color3.fromRGB(60, 120, 66), Enum.Material.Grass)
+	cap.Shape = Enum.PartType.Ball
+	cap.CanCollide = false
+
+	-- Пара кокосов под кроной
+	for i = 1, 2 do
+		local a = math.rad(i * 150 + 30)
+		local coconut = makePart(model, "Coconut_" .. i, Vector3.new(1.2 * scale, 1.2 * scale, 1.2 * scale), CFrame.new(crownPos + Vector3.new(math.cos(a) * 1.7, -1.5 * scale, math.sin(a) * 1.7)), Color3.fromRGB(74, 47, 25), Enum.Material.SmoothPlastic)
+		coconut.Shape = Enum.PartType.Ball
+		coconut.CanCollide = false
+	end
+
 	return model
 end
 
-local function buildIslandDecor(parent, position, plotId)
+-- Расставляет пальмы и камни по острову, обходя центр (ракеты), направления слотов
+-- (кнопки/мосты) и точку спавна.
+local function buildIslandDecor(parent, position, plotId, isCentral)
 	local decor = Instance.new("Folder")
 	decor.Name = "IslandDecor"
 	decor.Parent = parent
-	local rotation = (plotId * 37) % 360
 
-	for index, offset in ipairs({ Vector3.new(-34, 10, 28), Vector3.new(36, 10, 20), Vector3.new(-28, 10, -30) }) do
-		local trunk = makePart(decor, "PalmTrunk_" .. index, Vector3.new(1.4, 14, 1.4), CFrame.new(position + offset + Vector3.new(0, 7, 0)) * CFrame.Angles(math.rad(index * 4), 0, math.rad(index * 3)), Color3.fromRGB(111, 77, 43), Enum.Material.Wood)
-		for leaf = 1, 6 do
-			local angle = math.rad(rotation + leaf * 60)
-			local leafPart = makePart(decor, "PalmLeaf", Vector3.new(2.2, 0.35, 11), CFrame.new(trunk.Position + Vector3.new(0, 7, 0)) * CFrame.Angles(math.rad(20), angle, 0) * CFrame.new(0, 0, -4), Color3.fromRGB(53, 127, 71), Enum.Material.Grass)
-			leafPart.CanCollide = false
+	local slotDirs = {}
+	if not isCentral then
+		for _, off in pairs(Config.SLOT_OFFSETS) do
+			table.insert(slotDirs, off.Unit)
+		end
+	end
+	local spawnPos = position + Vector3.new(-14, SURFACE_OFFSET, -18)
+
+	local target = isCentral and 8 or (6 + (plotId % 3)) -- 6..8 пальм на остров
+	local placed, attempts = 0, 0
+	while placed < target and attempts < 60 do
+		attempts += 1
+		local ang = math.random() * math.pi * 2
+		local dir = Vector3.new(math.cos(ang), 0, math.sin(ang))
+
+		local blocked = false
+		for _, sd in ipairs(slotDirs) do
+			if dir:Dot(sd) > math.cos(math.rad(24)) then
+				blocked = true
+				break
+			end
+		end
+		if not blocked then
+			local radius = (isCentral and 24 or 40) + math.random() * 16
+			local pos = position + dir * radius + Vector3.new(0, SURFACE_OFFSET, 0)
+			if (pos - spawnPos).Magnitude > 14 then
+				buildPalm(decor, pos, math.deg(ang) + math.random(-40, 40), 0.85 + math.random() * 0.55)
+				placed += 1
+			end
 		end
 	end
 
-	for index, offset in ipairs({ Vector3.new(43, 9, -22), Vector3.new(-42, 9, 6), Vector3.new(17, 9, 42), Vector3.new(-10, 9, -43) }) do
+	-- Прибрежные камни (наполовину в песке)
+	for index, offset in ipairs({ Vector3.new(48, SURFACE_OFFSET - 1, -24), Vector3.new(-46, SURFACE_OFFSET - 1, 8), Vector3.new(18, SURFACE_OFFSET - 1, 47), Vector3.new(-12, SURFACE_OFFSET - 1, -47) }) do
 		local rock = makePart(decor, "BeachRock_" .. index, Vector3.new(4 + index, 3 + index % 2, 4 + index), CFrame.new(position + offset), Color3.fromRGB(111, 105, 91), Enum.Material.Rock)
 		rock.Shape = Enum.PartType.Ball
 	end
+end
+
+-- Центральный остров закрывает "дырку" в самом центре карты (world origin).
+local function buildCentralIsland()
+	local old = workspace:FindFirstChild("CentralIsland")
+	if old then old:Destroy() end
+
+	local folder = Instance.new("Folder")
+	folder.Name = "CentralIsland"
+	folder.Parent = workspace
+	local position = Vector3.new(0, Config.PLOT_POSITIONS[1].Y, 0)
+
+	buildIslandBase(folder, position, Color3.fromRGB(238, 216, 158))
+	buildIslandDecor(folder, position, 0, true)
+
+	-- Скала-ориентир по центру
+	local rock = makePart(folder, "CenterRock", Vector3.new(18, 30, 18), CFrame.new(position + Vector3.new(0, SURFACE_OFFSET + 15, 0)), Color3.fromRGB(96, 92, 80), Enum.Material.Rock)
+	rock.Shape = Enum.PartType.Ball
+	local peak = makePart(folder, "CenterPeak", Vector3.new(9, 16, 9), CFrame.new(position + Vector3.new(0, SURFACE_OFFSET + 30, 0)), Color3.fromRGB(108, 104, 92), Enum.Material.Rock)
+	peak.Shape = Enum.PartType.Ball
 end
 
 local function buildIslandModel(plotId, position)
@@ -149,15 +284,10 @@ local function buildIslandModel(plotId, position)
 	folder.Parent = workspace
 
 	local themeColor = PLOT_THEME_COLORS[plotId] or Color3.fromRGB(150, 150, 150)
-	local pattern = ISLAND_PATTERNS[(plotId - 1) % #ISLAND_PATTERNS + 1]
-	local shoreScale = Config.PLOT_CENTER_SIZE
 
-	-- Three stacked, offset coast layers make each island read as sand over rock,
-	-- rather than a perfectly circular platform.
-	makeIslandLayer(folder, "SubmergedReef", position, pattern, -21, 18, shoreScale * 1.16, Color3.fromRGB(52, 73, 78), Enum.Material.Slate)
-	makeIslandLayer(folder, "RockShelf", position, pattern, -5, 16, shoreScale * 1.04, Color3.fromRGB(92, 87, 75), Enum.Material.Rock)
-	makeIslandLayer(folder, "SandShore", position, pattern, 6, 8, shoreScale, Color3.fromRGB(235, 211, 149), Enum.Material.Sand)
-	buildIslandDecor(folder, position, plotId)
+	-- Единые сплошные цилиндры вместо перекрывающихся сегментов (устраняет z-fighting песка).
+	buildIslandBase(folder, position, Color3.fromRGB(235, 211, 149))
+	buildIslandDecor(folder, position, plotId, false)
 
 	local spawn = Instance.new("SpawnLocation")
 	spawn.Name = "PlotSpawn"
@@ -175,7 +305,8 @@ local function buildIslandModel(plotId, position)
 	siloFolder.Name = "RocketSilo"
 	siloFolder.Parent = folder
 
-	-- Purchase pads are inset into the beach so the island stays a coherent space.
+	-- Кнопки покупки — плоские зелёные "блины" на песке. Покупка/прокачка срабатывает
+	-- по НАСТУПАНИЮ (Touched), без ProximityPrompt. Над каждой висит ценник (BillboardGui).
 	local slotsData = {}
 	for slotIdx, offset in ipairs(Config.SLOT_OFFSETS) do
 		local dir = offset.Unit
@@ -185,32 +316,46 @@ local function buildIslandModel(plotId, position)
 		buyPad.Name = "BuyPad_" .. slotIdx
 		buyPad.Shape = Enum.PartType.Cylinder
 		buyPad.Anchored = true
-		buyPad.Size = Vector3.new(0.45, 7, 7)
+		buyPad.Size = Vector3.new(0.6, 8, 8)
 		buyPad.Orientation = Vector3.new(0, 0, 90)
-		buyPad.Position = edgePos + Vector3.new(0, 10.25, 0)
-		buyPad.Color = Color3.fromRGB(69, 160, 99)
-		buyPad.Material = Enum.Material.SmoothPlastic
+		buyPad.Position = edgePos + Vector3.new(0, SURFACE_OFFSET + 0.3, 0)
+		buyPad.Color = Color3.fromRGB(69, 200, 110)
+		buyPad.Material = Enum.Material.Neon
 		if slotIdx > 1 then
+			-- Заблокированные слоты скрыты до постройки предыдущего.
 			buyPad.Transparency = 1
 			buyPad.CanCollide = false
 		end
 		buyPad.Parent = folder
 
-		local prompt = Instance.new("ProximityPrompt")
-		prompt.Name = "BuyPrompt"
-		prompt.ActionText = "Построить"
-		prompt.ObjectText = ""
-		prompt.HoldDuration = 0.25
-		prompt.MaxActivationDistance = 10
-		prompt.RequiresLineOfSight = false
-		prompt.Enabled = slotIdx == 1
-		prompt.Parent = buyPad
+		-- Ценник над кнопкой
+		local billboard = Instance.new("BillboardGui")
+		billboard.Name = "PriceTag"
+		billboard.Size = UDim2.new(0, 210, 0, 58)
+		billboard.StudsOffset = Vector3.new(0, 6, 0)
+		billboard.AlwaysOnTop = true
+		billboard.Enabled = slotIdx == 1
+		billboard.Parent = buyPad
+
+		local priceLabel = Instance.new("TextLabel")
+		priceLabel.Name = "PriceLabel"
+		priceLabel.Size = UDim2.new(1, 0, 1, 0)
+		priceLabel.BackgroundTransparency = 1
+		priceLabel.TextScaled = true
+		priceLabel.Font = Enum.Font.GothamBold
+		priceLabel.TextColor3 = Color3.fromRGB(190, 255, 200)
+		priceLabel.TextStrokeColor3 = Color3.fromRGB(0, 45, 10)
+		priceLabel.TextStrokeTransparency = 0.4
+		local cfg = Config.FARM_TYPES[slotIdx]
+		priceLabel.Text = string.format("%s\n$%d", cfg.name, cfg.cost)
+		priceLabel.Parent = billboard
 
 		slotsData[slotIdx] = {
 			center = position + offset,
 			edgePos = edgePos,
 			buyPad = buyPad,
-			buyPrompt = prompt,
+			billboard = billboard,
+			priceLabel = priceLabel,
 		}
 	end
 
@@ -250,6 +395,9 @@ function PlotManager.Init()
 	local oldWildlife = workspace:FindFirstChild("OceanWildlife")
 	if oldWildlife then oldWildlife:Destroy() end
 	buildOcean()
+
+	-- Закрываем "дырку" в центре карты центральным островом.
+	buildCentralIsland()
 
 	for i, pos in ipairs(Config.PLOT_POSITIONS) do
 		buildIslandModel(i, pos)
@@ -297,18 +445,73 @@ function PlotManager.CreateLauncher(player, launcherIndex)
 	model.Name = "Launcher_" .. launcherIndex
 	model:SetAttribute("LauncherIndex", launcherIndex)
 	model.Parent = plot.folder:FindFirstChild("RocketSilo")
-	local position = plot.center + offset + Vector3.new(0, 14, 0)
-	local base = makePart(model, "Base", Vector3.new(12, 2, 12), CFrame.new(position), Color3.fromRGB(52, 60, 67), Enum.Material.DiamondPlate)
-	local rim = makePart(model, "ReadyRim", Vector3.new(1, 10, 10), CFrame.new(position + Vector3.new(0, 1.5, 0)) * CFrame.Angles(0, 0, math.rad(90)), plot.themeColor, Enum.Material.Neon)
-	rim.Shape = Enum.PartType.Cylinder
+
+	local teamColor = plot.themeColor
+	-- Ракета СТОИТ на песке: считаем уровень песка и ставим на него бетонную площадку.
+	local sandY = plot.center.Y + SURFACE_OFFSET
+	local basePos = Vector3.new(plot.center.X + offset.X, sandY, plot.center.Z + offset.Z)
+
+	-- Бетонная площадка ~0.3 studs, лежащая на песке
+	local pad = makeCylinder(model, "Pad", 0.3, 9, basePos + Vector3.new(0, 0.15, 0), Color3.fromRGB(150, 150, 155), Enum.Material.Concrete)
+	local rim = makeCylinder(model, "ReadyRim", 0.5, 10, basePos + Vector3.new(0, 0.35, 0), teamColor, Enum.Material.Neon)
 	rim.CanCollide = false
-	local rocket = makePart(model, "Rocket", Vector3.new(12, 3.2, 3.2), CFrame.new(position + Vector3.new(0, 7.5, 0)) * CFrame.Angles(0, 0, math.rad(90)), Color3.fromRGB(224, 230, 232), Enum.Material.Metal)
-	rocket.Shape = Enum.PartType.Cylinder
-	local nose = makePart(model, "Nose", Vector3.new(3.5, 3.5, 3.5), CFrame.new(position + Vector3.new(0, 14.5, 0)), plot.themeColor, Enum.Material.Neon)
-	nose.Shape = Enum.PartType.Ball
-	nose.CanCollide = false
-	model.PrimaryPart = base
-	plot.launchers[launcherIndex] = { model = model, rocket = rocket, nose = nose, rim = rim, origin = nose.Position }
+
+	local bottomY = sandY + 0.3
+	local parts = {}
+
+	-- Сопло (тёмный цилиндр снизу)
+	local nozzle = makeCylinder(model, "Nozzle", 1.6, 2.1, Vector3.new(basePos.X, bottomY + 0.8, basePos.Z), Color3.fromRGB(45, 45, 50), Enum.Material.Metal)
+	nozzle.CanCollide = false
+	table.insert(parts, nozzle)
+
+	-- Корпус (высота ~11, диаметр 3)
+	local bodyH = 11
+	local bodyCenterY = bottomY + 1.4 + bodyH / 2
+	local body = makeCylinder(model, "Body", bodyH, 3, Vector3.new(basePos.X, bodyCenterY, basePos.Z), Color3.fromRGB(232, 236, 238), Enum.Material.SmoothPlastic)
+	table.insert(parts, body)
+
+	-- Полоса цвета команды
+	local stripe = makeCylinder(model, "Stripe", 1.6, 3.12, Vector3.new(basePos.X, bodyCenterY + 1.6, basePos.Z), teamColor, Enum.Material.SmoothPlastic)
+	stripe.CanCollide = false
+	table.insert(parts, stripe)
+
+	-- Иллюминатор (маленький круглый парт на корпусе)
+	local window = makePart(model, "Window", Vector3.new(0.4, 1.1, 1.1), CFrame.new(Vector3.new(basePos.X, bodyCenterY + 3, basePos.Z - 1.55)) * CFrame.Angles(0, math.rad(90), 0), Color3.fromRGB(120, 210, 235), Enum.Material.Glass)
+	window.Shape = Enum.PartType.Cylinder
+	window.CanCollide = false
+
+	-- Конусообразный нос (сборка из сужающихся цилиндров)
+	local noseBottom = bodyCenterY + bodyH / 2
+	for i = 1, 4 do
+		local d = 3 * (1 - i * 0.2)
+		local nc = makeCylinder(model, "Nose_" .. i, 1.0, math.max(d, 0.4), Vector3.new(basePos.X, noseBottom + (i - 0.5) * 1.0, basePos.Z), teamColor, Enum.Material.SmoothPlastic)
+		nc.CanCollide = false
+		table.insert(parts, nc)
+	end
+	local origin = Vector3.new(basePos.X, noseBottom + 4.0, basePos.Z)
+
+	-- 4 стабилизатора-плавника внизу (клинья)
+	for i = 1, 4 do
+		local a = math.rad(i * 90)
+		local finPos = Vector3.new(basePos.X + math.cos(a) * 1.8, bottomY + 1.9, basePos.Z + math.sin(a) * 1.8)
+		local fin = makeWedge(model, "Fin_" .. i, Vector3.new(0.4, 3.4, 2.8), CFrame.new(finPos) * CFrame.Angles(0, -a + math.rad(90), 0), teamColor, Enum.Material.SmoothPlastic)
+		fin.CanCollide = false
+		table.insert(parts, fin)
+	end
+
+	-- ProximityPrompt "Запустить" (зажать E)
+	local prompt = Instance.new("ProximityPrompt")
+	prompt.Name = "LaunchPrompt"
+	prompt.ActionText = Config.LAUNCH_PROMPT_ACTION
+	prompt.ObjectText = "Ракета " .. launcherIndex
+	prompt.HoldDuration = Config.LAUNCH_PROMPT_HOLD
+	prompt.KeyboardKeyCode = Enum.KeyCode.E
+	prompt.MaxActivationDistance = 14
+	prompt.RequiresLineOfSight = false
+	prompt.Parent = body
+
+	model.PrimaryPart = pad
+	plot.launchers[launcherIndex] = { model = model, parts = parts, window = window, rim = rim, prompt = prompt, origin = origin }
 	return plot.launchers[launcherIndex]
 end
 
@@ -316,9 +519,13 @@ function PlotManager.SetLauncherReady(player, launcherIndex, ready)
 	local _, plot = PlotManager.GetPlotByPlayer(player)
 	local launcher = plot and plot.launchers[launcherIndex]
 	if not launcher then return end
-	launcher.rocket.Transparency = ready and 0 or 1
-	launcher.nose.Transparency = ready and 0 or 1
-	launcher.rim.Color = ready and plot.themeColor or Color3.fromRGB(85, 91, 95)
+	local t = ready and 0 or 1
+	for _, p in ipairs(launcher.parts) do
+		p.Transparency = t
+	end
+	if launcher.window then launcher.window.Transparency = ready and 0.15 or 1 end
+	if launcher.rim then launcher.rim.Color = ready and plot.themeColor or Color3.fromRGB(85, 91, 95) end
+	if launcher.prompt then launcher.prompt.Enabled = ready end
 end
 
 function PlotManager.GetLauncherOrigin(player, launcherIndex)

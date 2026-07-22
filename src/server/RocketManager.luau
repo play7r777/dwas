@@ -100,15 +100,20 @@ function RocketManager.Init()
 		local now = os.clock()
 		if now - (lastRequest[player] or 0) < 0.2 then return end
 		lastRequest[player] = now
-		if type(targetPlotId) ~= "number" or type(targetSlotIndex) ~= "number" then return end
-		if targetPlotId % 1 ~= 0 or targetSlotIndex % 1 ~= 0 or targetSlotIndex < 1 or targetSlotIndex > #Config.FARM_TYPES then return end
+		if type(targetPlotId) ~= "number" or targetPlotId % 1 ~= 0 then return end
 
 		local targetPlot = PlotManager.GetPlot(targetPlotId)
 		local myPlotId = select(1, PlotManager.GetPlotByPlayer(player))
-		if not targetPlot or not targetPlot.owner or myPlotId == targetPlotId then return end
-		if not FarmManager.IsSlotAlive(targetPlotId, targetSlotIndex) then
-			notify(player, "Эта цель недоступна", "error")
-			return
+		-- Можно бить по ЛЮБОМУ острову (в т.ч. пустому без владельца), кроме своего.
+		if not targetPlot or myPlotId == targetPlotId then return end
+
+		-- Цель по слоту опциональна: если задан живой слот — наносим урон,
+		-- иначе прилёт в центр острова (только визуально).
+		local slotIndex = nil
+		if type(targetSlotIndex) == "number" and targetSlotIndex % 1 == 0
+			and targetSlotIndex >= 1 and targetSlotIndex <= #Config.FARM_TYPES
+			and FarmManager.IsSlotAlive(targetPlotId, targetSlotIndex) then
+			slotIndex = targetSlotIndex
 		end
 
 		local launcherIndex = takeReadyLauncher(player)
@@ -118,15 +123,24 @@ function RocketManager.Init()
 		end
 		local originPos = PlotManager.GetLauncherOrigin(player, launcherIndex)
 		if not originPos then return end
-		local targetPos = FarmManager.GetSlotTargetPosition(targetPlotId, targetSlotIndex)
-		local destroyed = FarmManager.DamageAtSlot(targetPlotId, targetSlotIndex, Config.ROCKET_DAMAGE)
+
+		local targetPos, destroyed
+		if slotIndex then
+			targetPos = FarmManager.GetSlotTargetPosition(targetPlotId, slotIndex)
+			destroyed = FarmManager.DamageAtSlot(targetPlotId, slotIndex, Config.ROCKET_DAMAGE)
+		else
+			-- Прилёт в центр острова с небольшим случайным разбросом.
+			targetPos = targetPlot.center + Vector3.new((math.random() - 0.5) * 30, 10, (math.random() - 0.5) * 30)
+			destroyed = false
+		end
 
 		firedEvent:FireAllClients({
 			shooterName = player.DisplayName,
+			shooterUserId = player.UserId,
 			originPos = originPos,
 			targetPos = targetPos,
 			targetPlotId = targetPlotId,
-			targetSlotIndex = targetSlotIndex,
+			targetSlotIndex = slotIndex,
 			destroyed = destroyed,
 		})
 	end)
