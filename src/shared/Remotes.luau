@@ -6,8 +6,9 @@ local Remotes = {}
 local EVENT_NAMES = {
 	"BuyLauncher",
 	"BuyBuildingSlot",
-	"LaunchRocket",
-	"RocketFired",
+	"LaunchRocket",       -- client→server: (targetPlotId, targetPos?) запрос запуска
+	"RocketFollow",       -- server→стрелок: (rocketModel) какую ракету вести камерой
+	"RocketImpact",       -- server→всем: (data) взрыв/звук в точке удара
 	"UpdateData",
 	"RocketStateChanged",
 	"BuildingStateChanged",

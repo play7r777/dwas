@@ -13,10 +13,11 @@ local playerGui = player:WaitForChild("PlayerGui")
 local HudManager = {}
 
 local animEnabled = true
-local moneyLabel, rocketLabel, buyRocketBtn
+local moneyLabel, rocketLabel, buyRocketBtn, aimBtn
 local launcherCount = Config.START_LAUNCHERS
 local rocketReady = Config.START_LAUNCHERS
-local targetListFrame
+local targetListFrame, targetPanel
+local targetingMode = false
 local notifFrame, notifLabel, notifThread
 
 local function makeFrame(parent, size, pos, color, alpha, name)
@@ -87,68 +88,58 @@ local function getPlotForUser(userId)
 	return nil, nil
 end
 
+-- Список ЗАНЯТЫХ вражеских островов. Клик по «Огонь» бьёт по центру острова.
 local function refreshTargets()
 	if not targetListFrame then return end
 	for _, child in ipairs(targetListFrame:GetChildren()) do
-		if child:IsA("Frame") or child:IsA("TextButton") then child:Destroy() end
+		if child:IsA("Frame") or child:IsA("TextButton") or child:IsA("TextLabel") then child:Destroy() end
 	end
 
+	local any = false
 	for _, targetPlayer in ipairs(Players:GetPlayers()) do
 		if targetPlayer == player then continue end
 		local targetPlotFolder, targetPlotId = getPlotForUser(targetPlayer.UserId)
 		if not targetPlotFolder or not targetPlotId then continue end
+		any = true
 
-		local activeSlots = {}
-		for slotIndex = 1, #Config.FARM_TYPES do
-			local territory = targetPlotFolder:FindFirstChild("Territory_" .. slotIndex)
-			local home = territory and territory:FindFirstChild("IncomeHome_" .. slotIndex)
-			if home and home:GetAttribute("Alive") ~= false then
-				table.insert(activeSlots, slotIndex)
-			end
-		end
-		if #activeSlots == 0 then continue end
+		local card = makeFrame(targetListFrame, UDim2.new(1, -8, 0, 60), UDim2.new(), Color3.fromRGB(35, 42, 47), 0.08, targetPlayer.Name)
+		makeLabel(card, targetPlayer.DisplayName, UDim2.new(1, -16, 0, 22), UDim2.fromOffset(8, 5), Color3.fromRGB(235, 239, 241), 14, Enum.Font.GothamBold)
+		makeLabel(card, "Остров #" .. targetPlotId, UDim2.new(1, -84, 0, 18), UDim2.fromOffset(8, 28), Color3.fromRGB(170, 185, 190), 12)
+		local attack = makeButton(card, "Огонь", UDim2.fromOffset(66, 26), UDim2.new(1, -74, 0, 26), Color3.fromRGB(205, 67, 55))
+		attack.MouseButton1Click:Connect(function()
+			Remotes.Get("LaunchRocket"):FireServer(targetPlotId)
+		end)
+	end
 
-		local card = makeFrame(targetListFrame, UDim2.new(1, -8, 0, 32 + #activeSlots * 30), UDim2.new(), Color3.fromRGB(35, 42, 47), 0.08, targetPlayer.Name)
-		makeLabel(card, targetPlayer.DisplayName, UDim2.new(1, -12, 0, 26), UDim2.fromOffset(7, 2), Color3.fromRGB(235, 239, 241), 14, Enum.Font.GothamBold)
-		for rowIndex, slotIndex in ipairs(activeSlots) do
-			local farmConfig = Config.FARM_TYPES[slotIndex]
-			local row = makeFrame(card, UDim2.new(1, -12, 0, 25), UDim2.fromOffset(6, 28 + (rowIndex - 1) * 30), Color3.fromRGB(48, 57, 62), 0, "Target_" .. slotIndex)
-			makeLabel(row, farmConfig.name, UDim2.new(1, -70, 1, 0), UDim2.fromOffset(6, 0), farmConfig.color, 11)
-			local attack = makeButton(row, "Огонь", UDim2.fromOffset(58, 21), UDim2.new(1, -62, 0, 2), Color3.fromRGB(205, 67, 55))
-			attack.TextSize = 11
-			attack.MouseButton1Click:Connect(function()
-				Remotes.Get("LaunchRocket"):FireServer(targetPlotId, slotIndex)
-			end)
-		end
+	if not any then
+		makeLabel(targetListFrame, "Нет активных врагов", UDim2.new(1, -8, 0, 24), UDim2.new(), Color3.fromRGB(170, 185, 190), 13)
 	end
 end
 
+-- Идём вверх по иерархии клика до папки острова (у неё есть атрибут PlotId).
+local function findClickedPlot(part)
+	local current = part
+	while current and current ~= workspace do
+		if current:GetAttribute("PlotId") ~= nil then
+			return current:GetAttribute("PlotId"), current:GetAttribute("OwnerUserId")
+		end
+		current = current.Parent
+	end
+	return nil, nil
+end
+
+-- В режиме прицела клик по ЛЮБОЙ точке вражеского острова задаёт точную цель (raycast).
 local function setup3DClickTargeting()
 	local mouse = player:GetMouse()
 	UserInputService.InputBegan:Connect(function(input, gpe)
 		if gpe then return end
+		if not targetingMode then return end
 		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
 			local targetPart = mouse.Target
 			if not targetPart then return end
-
-			local home = nil
-			local current = targetPart.Parent
-			while current and current ~= workspace do
-				if current.Name:match("^IncomeHome_") then
-					home = current
-					break
-				end
-				current = current.Parent
-			end
-			if home and home.Name:match("^IncomeHome_") and home:GetAttribute("Alive") ~= false then
-				local slotIndex = tonumber(home.Name:match("%d+"))
-				local territoryFolder = home.Parent
-				local plotFolder = territoryFolder and territoryFolder.Parent
-				local targetPlotId = plotFolder and plotFolder:GetAttribute("PlotId")
-				local ownerUserId = plotFolder and plotFolder:GetAttribute("OwnerUserId")
-				if targetPlotId and ownerUserId and ownerUserId ~= 0 and ownerUserId ~= player.UserId and slotIndex then
-					Remotes.Get("LaunchRocket"):FireServer(targetPlotId, slotIndex)
-				end
+			local plotId, ownerUserId = findClickedPlot(targetPart)
+			if plotId and ownerUserId and ownerUserId ~= 0 and ownerUserId ~= player.UserId then
+				Remotes.Get("LaunchRocket"):FireServer(plotId, mouse.Hit.Position)
 			end
 		end
 	end)
@@ -177,14 +168,21 @@ function HudManager.Init(initAnimEnabled)
 	moneyLabel = makeLabel(resPanel, "Деньги  $0", UDim2.new(1, -10, 0, 22), UDim2.new(0, 8, 0, 32), Color3.fromRGB(255, 214, 90), 15)
 	rocketLabel = makeLabel(resPanel, "Готово  1 / 1", UDim2.new(1, -10, 0, 22), UDim2.new(0, 8, 0, 56), Color3.fromRGB(98, 220, 144), 15)
 
-	local actPanel = makeFrame(screenGui, UDim2.new(0, 230, 0, 55), UDim2.new(0, 12, 0, 125), Color3.fromRGB(20, 20, 30), 0.1, "ActPanel")
+	local actPanel = makeFrame(screenGui, UDim2.new(0, 230, 0, 100), UDim2.new(0, 12, 0, 125), Color3.fromRGB(20, 20, 30), 0.1, "ActPanel")
 
 	buyRocketBtn = makeButton(actPanel, "Установка 2  $" .. Config.LAUNCHER_COSTS[2], UDim2.new(1, -16, 0, 38), UDim2.new(0, 8, 0, 8), Color3.fromRGB(33, 133, 151))
 	buyRocketBtn.MouseButton1Click:Connect(function()
 		Remotes.Get("BuyLauncher"):FireServer()
 	end)
 
-	local targetPanel = makeFrame(screenGui, UDim2.new(0, 260, 0, 380), UDim2.new(1, -272, 0, 12), Color3.fromRGB(20, 20, 30), 0.1, "TargetPanel")
+	-- Кнопка/клавиша E открывает UI выбора цели и включает прицел по 3D-миру.
+	aimBtn = makeButton(actPanel, "Прицел (E)", UDim2.new(1, -16, 0, 38), UDim2.new(0, 8, 0, 54), Color3.fromRGB(205, 67, 55))
+	aimBtn.MouseButton1Click:Connect(function()
+		HudManager.SetTargeting(not targetingMode)
+	end)
+
+	targetPanel = makeFrame(screenGui, UDim2.new(0, 260, 0, 380), UDim2.new(1, -272, 0, 12), Color3.fromRGB(20, 20, 30), 0.1, "TargetPanel")
+	targetPanel.Visible = false
 
 	makeLabel(targetPanel, "ЦЕЛИ", UDim2.new(1, -10, 0, 26), UDim2.new(0, 8, 0, 4), Color3.fromRGB(236, 108, 91), 16, Enum.Font.GothamBold)
 
@@ -205,6 +203,14 @@ function HudManager.Init(initAnimEnabled)
 	targetListFrame = scrollFrame
 
 	setup3DClickTargeting()
+
+	-- Клавиша E открывает/закрывает выбор цели (не нужно стоять у ракеты).
+	UserInputService.InputBegan:Connect(function(input, gpe)
+		if gpe then return end
+		if input.KeyCode == Enum.KeyCode.E then
+			HudManager.SetTargeting(not targetingMode)
+		end
+	end)
 
 	Players.PlayerAdded:Connect(function() task.wait(1) refreshTargets() end)
 	Players.PlayerRemoving:Connect(function() task.wait(1) refreshTargets() end)
@@ -250,6 +256,19 @@ function HudManager.UpdateRocketState(data)
 	if rocketLabel then
 		rocketLabel.Text = string.format("Готово  %d / %d", rocketReady, launcherCount)
 		rocketLabel.TextColor3 = rocketReady > 0 and Color3.fromRGB(98, 220, 144) or Color3.fromRGB(239, 117, 91)
+	end
+end
+
+function HudManager.SetTargeting(on)
+	targetingMode = on and true or false
+	if targetPanel then targetPanel.Visible = targetingMode end
+	if aimBtn then
+		aimBtn.Text = targetingMode and "Прицел ВКЛ (E)" or "Прицел (E)"
+		aimBtn.BackgroundColor3 = targetingMode and Color3.fromRGB(120, 200, 255) or Color3.fromRGB(205, 67, 55)
+	end
+	if targetingMode then
+		refreshTargets()
+		HudManager.ShowNotification("Режим прицела: клик по вражескому острову. E — выкл", Color3.fromRGB(120, 200, 255))
 	end
 end
 

@@ -22,15 +22,21 @@ Config.ROCKET_SPEED = 115
 Config.ROCKET_ANIM_TIME = 3.2
 Config.ROCKET_ARC = 95
 
+-- Прилёт ракеты: если точка удара попадает в радиус ImpactRadius от здания,
+-- у здания отключается доход на DisableDuration секунд (см. FarmManager.DisableSlot).
+Config.Rocket = {
+	DisableDuration = 30,
+	ImpactRadius = 26,
+}
+
 -- Прокачка зданий: каждое здание можно улучшать до MAX_BUILDING_LEVEL.
 -- Стоимость следующего уровня = базовая цена * UPGRADE_COST_MULT^(текущий уровень),
 -- доход здания = базовый доход * уровень.
 Config.MAX_BUILDING_LEVEL = 10
 Config.UPGRADE_COST_MULT = 1.6
 
--- Запуск ракеты игроком: ProximityPrompt "Запустить" на ракете (зажать E).
-Config.LAUNCH_PROMPT_ACTION = "Запустить"
-Config.LAUNCH_PROMPT_HOLD = 0.5
+-- Запуск ракеты: клавиша E / кнопка HUD открывают выбор цели (см. HudManager).
+-- Стоять рядом с ракетой не нужно; ProximityPrompt больше не используется.
 
 Config.FARM_TYPES = {
 	[1] = {

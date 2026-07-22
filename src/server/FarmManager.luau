@@ -133,8 +133,11 @@ local function buildBuildingModel(plotId, slotIndex, tier, level, territoryFolde
 	lp("FrontWallRight", Vector3.new(sideWidth, wallHeight, 1), (5 + sideWidth) / 2, wallY, -depth / 2, palette.wall, Enum.Material.Plaster)
 	lp("DoorHeader", Vector3.new(5, 2.4, 1), 0, wallHeight - 0.7, -depth / 2, palette.trim, Enum.Material.Wood)
 
-	local roofLeft = lp("RoofLeft", Vector3.new(width / 2 + 1, 1, depth + 2), -width / 4, roofY, 0, palette.roof, Enum.Material.Slate, CFrame.Angles(0, 0, math.rad(-24)))
-	lp("RoofRight", Vector3.new(width / 2 + 1, 1, depth + 2), width / 4, roofY, 0, palette.roof, Enum.Material.Slate, CFrame.Angles(0, 0, math.rad(24)))
+	-- Двускатная крыша должна образовывать КОНЁК (пик /\), а не ложбину (\/):
+	-- у обоих скатов внутренний край (к центру дома) выше внешнего. Раньше знаки
+	-- наклона были перевёрнуты — главный скат выглядел как "\" вместо "/".
+	local roofLeft = lp("RoofLeft", Vector3.new(width / 2 + 1, 1, depth + 2), -width / 4, roofY, 0, palette.roof, Enum.Material.Slate, CFrame.Angles(0, 0, math.rad(24)))
+	lp("RoofRight", Vector3.new(width / 2 + 1, 1, depth + 2), width / 4, roofY, 0, palette.roof, Enum.Material.Slate, CFrame.Angles(0, 0, math.rad(-24)))
 	lp("Chimney", Vector3.new(2.2, 7, 2.2), width * 0.27, roofY + 3, 2, Color3.fromRGB(92, 80, 71), Enum.Material.Brick)
 
 	for _, side in ipairs({ -1, 1 }) do
@@ -152,7 +155,8 @@ local function buildBuildingModel(plotId, slotIndex, tier, level, territoryFolde
 
 	if tier >= 3 then
 		lp("SideRoom", Vector3.new(7, 7, 7), width / 2 + 3.5, 4, depth * 0.18, palette.wall, Enum.Material.Plaster)
-		lp("SideRoof", Vector3.new(9, 1, 9), width / 2 + 3.5, 8.5, depth * 0.18, palette.roof, Enum.Material.Slate, CFrame.Angles(0, 0, math.rad(18)))
+		-- Малый скат пристройки тоже был перевёрнут ("\"); разворачиваем в "/".
+		lp("SideRoof", Vector3.new(9, 1, 9), width / 2 + 3.5, 8.5, depth * 0.18, palette.roof, Enum.Material.Slate, CFrame.Angles(0, 0, math.rad(-18)))
 	end
 	if tier >= 4 then
 		local balcony = lp("Balcony", Vector3.new(7, 0.6, 4), 0, wallHeight * 0.63, depth / 2 + 2, palette.trim, Enum.Material.WoodPlanks)
@@ -385,14 +389,14 @@ local function updatePriceTag(plotId, slotIndex)
 
 	if not data then
 		slot.priceLabel.Text = string.format("%s\n$%d", base.name, base.cost)
-		slot.priceLabel.TextColor3 = Color3.fromRGB(190, 255, 200)
+		slot.priceLabel.TextColor3 = Color3.fromRGB(240, 244, 246)
 	elseif data.level >= Config.MAX_BUILDING_LEVEL then
 		slot.priceLabel.Text = string.format("%s (ур.%d)\nМакс. уровень", base.name, data.level)
-		slot.priceLabel.TextColor3 = Color3.fromRGB(255, 224, 130)
+		slot.priceLabel.TextColor3 = Color3.fromRGB(255, 224, 150)
 	else
 		local cost = Config.UpgradeCost(slotIndex, data.level + 1)
 		slot.priceLabel.Text = string.format("Прокачка до ур.%d\n$%d", data.level + 1, cost)
-		slot.priceLabel.TextColor3 = Color3.fromRGB(190, 235, 255)
+		slot.priceLabel.TextColor3 = Color3.fromRGB(240, 244, 246)
 	end
 end
 
@@ -430,7 +434,7 @@ local function spawnBuilding(plotId, slotIndex, level)
 	if plot and plot.slots[nextSlot] and not (plotFarms[plotId] and plotFarms[plotId][nextSlot]) then
 		plot.slots[nextSlot].buyPad.Transparency = 0
 		plot.slots[nextSlot].buyPad.CanCollide = true
-		if plot.slots[nextSlot].billboard then plot.slots[nextSlot].billboard.Enabled = true end
+		if plot.slots[nextSlot].billboard then plot.slots[nextSlot].billboard:SetAttribute("Unlocked", true) end
 	end
 
 	plotFarms[plotId][slotIndex] = {
@@ -573,7 +577,7 @@ function FarmManager.Init()
 			if plot and plot.slots[1] then
 				plot.slots[1].buyPad.Transparency = 0
 				plot.slots[1].buyPad.CanCollide = true
-				if plot.slots[1].billboard then plot.slots[1].billboard.Enabled = true end
+				if plot.slots[1].billboard then plot.slots[1].billboard:SetAttribute("Unlocked", true) end
 			end
 		end
 	end)
@@ -595,7 +599,8 @@ function FarmManager.Init()
 				local plotId = select(1, PlotManager.GetPlotByPlayer(player))
 				if plotId and plotFarms[plotId] then
 					for slotIdx, slotData in pairs(plotFarms[plotId]) do
-						if slotData and slotData.alive then
+						local disabled = slotData and slotData.disabledUntil and workspace:GetServerTimeNow() < slotData.disabledUntil
+						if slotData and slotData.alive and not disabled then
 							local farmConfig = Config.FARM_TYPES[slotData.tier]
 							if farmConfig then
 								-- Доход растёт с уровнем здания.
@@ -641,6 +646,110 @@ function FarmManager.DamageAtSlot(plotId, slotIndex, damage)
 		return true
 	end
 	return false
+end
+
+-- Ракетный прилёт «оглушает» здание: доход отключается на duration секунд,
+-- здание темнеет и дымит, пока не восстановится. disabledUntil — серверная метка.
+function FarmManager.DisableSlot(plotId, slotIndex, duration)
+	local slotData = plotFarms[plotId] and plotFarms[plotId][slotIndex]
+	if not slotData or not slotData.alive then return end
+
+	slotData.disabledUntil = workspace:GetServerTimeNow() + duration
+
+	-- Затемняем части здания, запомнив исходные цвет/материал для восстановления.
+	if slotData.folder and not slotData.disabledParts then
+		slotData.disabledParts = {}
+		for _, part in ipairs(slotData.folder:GetDescendants()) do
+			if part:IsA("BasePart") then
+				table.insert(slotData.disabledParts, { part = part, color = part.Color, material = part.Material })
+				part.Color = Color3.fromRGB(72, 66, 60)
+				part.Material = Enum.Material.Concrete
+			end
+		end
+	end
+
+	-- Дым над зданием как признак повреждения.
+	if slotData.body and not slotData.smoke then
+		local emitter = Instance.new("ParticleEmitter")
+		emitter.Name = "DisabledSmoke"
+		emitter.Texture = "rbxassetid://241594419"
+		emitter.Color = ColorSequence.new(Color3.fromRGB(58, 58, 60))
+		emitter.Size = NumberSequence.new(4, 9)
+		emitter.Transparency = NumberSequence.new({
+			NumberSequenceKeypoint.new(0, 0.2),
+			NumberSequenceKeypoint.new(1, 1),
+		})
+		emitter.Lifetime = NumberRange.new(1.2, 2.2)
+		emitter.Rate = 16
+		emitter.Speed = NumberRange.new(4, 7)
+		emitter.SpreadAngle = Vector2.new(22, 22)
+		emitter.Acceleration = Vector3.new(0, 6, 0)
+		emitter.Parent = slotData.body
+		slotData.smoke = emitter
+	end
+
+	if slotData.statusLabel then
+		slotData.statusLabel.Text = "Повреждено"
+		slotData.statusLabel.TextColor3 = Color3.fromRGB(255, 120, 90)
+	end
+
+	Remotes.Get("BuildingStateChanged"):FireAllClients(plotId, slotIndex, {
+		tier = slotData.tier,
+		level = slotData.level,
+		hp = slotData.hp,
+		maxHp = slotData.maxHp,
+		alive = slotData.alive,
+		disabled = true,
+		rebuildTimer = 0,
+	})
+
+	task.delay(duration, function()
+		local cur = plotFarms[plotId] and plotFarms[plotId][slotIndex]
+		if cur ~= slotData then return end -- здание было перестроено — старые данные не трогаем
+		if not slotData.disabledUntil or workspace:GetServerTimeNow() < slotData.disabledUntil then return end
+		slotData.disabledUntil = nil
+		if slotData.disabledParts then
+			for _, rec in ipairs(slotData.disabledParts) do
+				if rec.part and rec.part.Parent then
+					rec.part.Color = rec.color
+					rec.part.Material = rec.material
+				end
+			end
+			slotData.disabledParts = nil
+		end
+		if slotData.smoke then slotData.smoke:Destroy() slotData.smoke = nil end
+		if slotData.statusLabel and slotData.alive then
+			slotData.statusLabel.Text = string.format("ур.%d  +$%d", slotData.level or 1, Config.IncomeForLevel(slotData.tier, slotData.level or 1))
+			slotData.statusLabel.TextColor3 = Color3.fromRGB(129, 255, 161)
+		end
+	end)
+end
+
+-- Серверный расчёт прилёта: находит здания в радиусе точки удара и наносит им
+-- урон + отключает доход. Возвращает true, если что-то было разрушено.
+function FarmManager.ApplyRocketImpact(plotId, impactPos, damage)
+	local farms = plotFarms[plotId]
+	local plot = PlotManager.GetPlot(plotId)
+	if not farms or not plot then return false end
+
+	local radius = Config.Rocket.ImpactRadius
+	local anyDestroyed = false
+	for slotIndex, slotData in pairs(farms) do
+		if slotData and slotData.alive then
+			local slot = plot.slots[slotIndex]
+			if slot then
+				local c = slot.center
+				local flat = Vector3.new(c.X, impactPos.Y, c.Z)
+				if (flat - impactPos).Magnitude <= radius then
+					FarmManager.DisableSlot(plotId, slotIndex, Config.Rocket.DisableDuration)
+					if FarmManager.DamageAtSlot(plotId, slotIndex, damage) then
+						anyDestroyed = true
+					end
+				end
+			end
+		end
+	end
+	return anyDestroyed
 end
 
 function FarmManager.GetAllFarmData()

@@ -6,6 +6,7 @@ local Remotes    = require(sharedFolder:WaitForChild("Remotes"))
 local HudManager = require(script:WaitForChild("HudManager"))
 local RocketAnim = require(script:WaitForChild("RocketAnim"))
 local VisualFX   = require(script:WaitForChild("VisualFX"))
+local PriceTags  = require(script:WaitForChild("PriceTags"))
 
 -- Получение настроек анимации
 local getAnimFn = Remotes.Get("GetAnimSetting")
@@ -14,13 +15,20 @@ pcall(function()
 	animEnabled = getAnimFn:InvokeServer()
 end)
 
--- Инициализация HUD
+-- Инициализация HUD и ценников (видны только на своём острове)
 HudManager.Init(animEnabled)
+PriceTags.Init()
 
--- Слушатели сетевых событий
-local rocketFired = Remotes.Get("RocketFired")
-rocketFired.OnClientEvent:Connect(function(data)
-	RocketAnim.Play(data, HudManager.IsAnimEnabled())
+-- Камера стрелка следует за запущенной сервером ракетой
+local rocketFollow = Remotes.Get("RocketFollow")
+rocketFollow.OnClientEvent:Connect(function(rocketModel)
+	RocketAnim.Follow(rocketModel, HudManager.IsAnimEnabled())
+end)
+
+-- Прилёт ракеты: взрыв + звук + уведомление (у всех игроков)
+local rocketImpact = Remotes.Get("RocketImpact")
+rocketImpact.OnClientEvent:Connect(function(data)
+	RocketAnim.Impact(data)
 end)
 
 local updateData = Remotes.Get("UpdateData")

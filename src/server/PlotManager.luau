@@ -89,11 +89,13 @@ end
 local function buildOcean()
 	local terrain = workspace.Terrain
 	terrain:Clear()
-	terrain.WaterColor = Color3.fromRGB(20, 126, 171)
-	terrain.WaterTransparency = 0.18
-	terrain.WaterReflectance = 0.38
-	terrain.WaterWaveSize = 0.35
-	terrain.WaterWaveSpeed = 9
+	-- Тропическая бирюзовая вода из Terrain (не плоский Part): мягкие блики,
+	-- лёгкая волна, полупрозрачная толща — острова стоят заметно выше уровня воды.
+	terrain.WaterColor = Color3.fromRGB(33, 171, 176)
+	terrain.WaterTransparency = 0.7
+	terrain.WaterReflectance = 0.4
+	terrain.WaterWaveSize = 0.15
+	terrain.WaterWaveSpeed = 12
 
 	local waterDepth = Config.WATER_LEVEL - Config.SEABED_LEVEL
 	terrain:FillBlock(
@@ -293,7 +295,9 @@ local function buildIslandModel(plotId, position)
 	spawn.Name = "PlotSpawn"
 	spawn.Anchored = true
 	spawn.Size = Vector3.new(6, 1, 6)
-	spawn.Position = position + Vector3.new(-14, 10.5, -18)
+	-- нижняя грань поднята над песком (верх песка = position.Y + SURFACE_OFFSET),
+	-- чтобы грани не были копланарны с песком (устраняет z-fighting «плывущего песка»).
+	spawn.Position = position + Vector3.new(-14, SURFACE_OFFSET + 1.05, -18)
 	spawn.Color = Color3.fromRGB(245, 223, 163)
 	spawn.Material = Enum.Material.Sand
 	spawn.Neutral = false
@@ -311,6 +315,11 @@ local function buildIslandModel(plotId, position)
 	for slotIdx, offset in ipairs(Config.SLOT_OFFSETS) do
 		local dir = offset.Unit
 		local edgePos = position + dir * ((Config.PLOT_CENTER_SIZE / 2) - 14)
+		-- Сдвигаем кнопку ВБОК от радиальной линии (по ней идёт мост/тропа) и слегка
+		-- приподнимаем над песком: кнопка больше не пересекает мост и пальмы, а её
+		-- нижняя грань не копланарна песку (нет z-fighting).
+		local side = dir:Cross(Vector3.new(0, 1, 0))
+		local padPos = edgePos + side * 9 + Vector3.new(0, SURFACE_OFFSET + 0.8, 0)
 
 		local buyPad = Instance.new("Part")
 		buyPad.Name = "BuyPad_" .. slotIdx
@@ -318,7 +327,7 @@ local function buildIslandModel(plotId, position)
 		buyPad.Anchored = true
 		buyPad.Size = Vector3.new(0.6, 8, 8)
 		buyPad.Orientation = Vector3.new(0, 0, 90)
-		buyPad.Position = edgePos + Vector3.new(0, SURFACE_OFFSET + 0.3, 0)
+		buyPad.Position = padPos
 		buyPad.Color = Color3.fromRGB(69, 200, 110)
 		buyPad.Material = Enum.Material.Neon
 		if slotIdx > 1 then
@@ -328,24 +337,28 @@ local function buildIslandModel(plotId, position)
 		end
 		buyPad.Parent = folder
 
-		-- Ценник над кнопкой
+		-- Ценник над кнопкой. Enabled = false: видимостью управляет клиент
+		-- (PriceTags) — ценники показываются ТОЛЬКО на своём острове. Атрибут
+		-- Unlocked отражает, открыт ли слот (последовательное открытие слотов).
 		local billboard = Instance.new("BillboardGui")
 		billboard.Name = "PriceTag"
-		billboard.Size = UDim2.new(0, 210, 0, 58)
-		billboard.StudsOffset = Vector3.new(0, 6, 0)
+		billboard.Size = UDim2.new(0, 150, 0, 44)
+		billboard.StudsOffset = Vector3.new(0, 5, 0)
 		billboard.AlwaysOnTop = true
-		billboard.Enabled = slotIdx == 1
+		billboard.Enabled = false
+		billboard:SetAttribute("Unlocked", slotIdx == 1)
 		billboard.Parent = buyPad
 
 		local priceLabel = Instance.new("TextLabel")
 		priceLabel.Name = "PriceLabel"
 		priceLabel.Size = UDim2.new(1, 0, 1, 0)
 		priceLabel.BackgroundTransparency = 1
-		priceLabel.TextScaled = true
-		priceLabel.Font = Enum.Font.GothamBold
-		priceLabel.TextColor3 = Color3.fromRGB(190, 255, 200)
-		priceLabel.TextStrokeColor3 = Color3.fromRGB(0, 45, 10)
-		priceLabel.TextStrokeTransparency = 0.4
+		priceLabel.TextScaled = false
+		priceLabel.TextSize = 15
+		priceLabel.Font = Enum.Font.GothamMedium
+		priceLabel.TextColor3 = Color3.fromRGB(240, 244, 246)
+		priceLabel.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
+		priceLabel.TextStrokeTransparency = 0.5
 		local cfg = Config.FARM_TYPES[slotIdx]
 		priceLabel.Text = string.format("%s\n$%d", cfg.name, cfg.cost)
 		priceLabel.Parent = billboard
@@ -451,9 +464,10 @@ function PlotManager.CreateLauncher(player, launcherIndex)
 	local sandY = plot.center.Y + SURFACE_OFFSET
 	local basePos = Vector3.new(plot.center.X + offset.X, sandY, plot.center.Z + offset.Z)
 
-	-- Бетонная площадка ~0.3 studs, лежащая на песке
-	local pad = makeCylinder(model, "Pad", 0.3, 9, basePos + Vector3.new(0, 0.15, 0), Color3.fromRGB(150, 150, 155), Enum.Material.Concrete)
-	local rim = makeCylinder(model, "ReadyRim", 0.5, 10, basePos + Vector3.new(0, 0.35, 0), teamColor, Enum.Material.Neon)
+	-- Бетонная площадка лежит на песке; приподнята так, чтобы её нижняя грань
+	-- не была копланарна поверхности песка (нет z-fighting).
+	local pad = makeCylinder(model, "Pad", 0.3, 9, basePos + Vector3.new(0, 0.35, 0), Color3.fromRGB(150, 150, 155), Enum.Material.Concrete)
+	local rim = makeCylinder(model, "ReadyRim", 0.5, 10, basePos + Vector3.new(0, 0.6, 0), teamColor, Enum.Material.Neon)
 	rim.CanCollide = false
 
 	local bottomY = sandY + 0.3
@@ -499,19 +513,11 @@ function PlotManager.CreateLauncher(player, launcherIndex)
 		table.insert(parts, fin)
 	end
 
-	-- ProximityPrompt "Запустить" (зажать E)
-	local prompt = Instance.new("ProximityPrompt")
-	prompt.Name = "LaunchPrompt"
-	prompt.ActionText = Config.LAUNCH_PROMPT_ACTION
-	prompt.ObjectText = "Ракета " .. launcherIndex
-	prompt.HoldDuration = Config.LAUNCH_PROMPT_HOLD
-	prompt.KeyboardKeyCode = Enum.KeyCode.E
-	prompt.MaxActivationDistance = 14
-	prompt.RequiresLineOfSight = false
-	prompt.Parent = body
+	-- Запуск идёт через UI выбора цели (клавиша E / кнопка HUD), а не по ProximityPrompt:
+	-- игроку НЕ нужно стоять рядом с ракетой, чтобы стрелять.
 
 	model.PrimaryPart = pad
-	plot.launchers[launcherIndex] = { model = model, parts = parts, window = window, rim = rim, prompt = prompt, origin = origin }
+	plot.launchers[launcherIndex] = { model = model, parts = parts, window = window, rim = rim, origin = origin }
 	return plot.launchers[launcherIndex]
 end
 
@@ -525,7 +531,6 @@ function PlotManager.SetLauncherReady(player, launcherIndex, ready)
 	end
 	if launcher.window then launcher.window.Transparency = ready and 0.15 or 1 end
 	if launcher.rim then launcher.rim.Color = ready and plot.themeColor or Color3.fromRGB(85, 91, 95) end
-	if launcher.prompt then launcher.prompt.Enabled = ready end
 end
 
 function PlotManager.GetLauncherOrigin(player, launcherIndex)
