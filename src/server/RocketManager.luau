@@ -18,6 +18,26 @@ local function notify(player, message, kind)
 	Remotes.Get("Notify"):FireClient(player, message, kind or "info")
 end
 
+-- Авторитетная проверка близости: стрелок обязан стоять рядом с одной из СВОИХ
+-- установок (не дальше Config.LAUNCH_MAX_DISTANCE по горизонтали). Клиент открывает
+-- прицел только вблизи установки, но сервер не доверяет этому и проверяет сам.
+local function nearOwnLauncher(player)
+	local char = player.Character
+	local hrp = char and char:FindFirstChild("HumanoidRootPart")
+	if not hrp then return false end
+	local maxDist = Config.LAUNCH_MAX_DISTANCE
+	for index = 1, DataManager.GetLauncherCount(player) do
+		local origin = PlotManager.GetLauncherOrigin(player, index)
+		if origin then
+			local flat = Vector3.new(hrp.Position.X - origin.X, 0, hrp.Position.Z - origin.Z)
+			if flat.Magnitude <= maxDist then
+				return true
+			end
+		end
+	end
+	return false
+end
+
 -- Летящая ракета строится СЕРВЕРОМ (реплицируется всем): корень (нос по -Z),
 -- корпус, конусный нос, полоса, стабилизаторы и дымный след. Урон/прилёт —
 -- тоже на сервере, поэтому бой авторитетен.
@@ -220,6 +240,12 @@ function RocketManager.Init()
 		-- Можно бить по ЛЮБОМУ острову (в т.ч. пустому без владельца), кроме своего.
 		if not targetPlot or myPlotId == targetPlotId then
 			notify(player, "Недопустимая цель", "error")
+			return
+		end
+
+		-- Дистанция: стрелок должен стоять рядом со своей установкой.
+		if not nearOwnLauncher(player) then
+			notify(player, "Подойдите к своей ракетной установке", "error")
 			return
 		end
 

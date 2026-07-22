@@ -35,8 +35,11 @@ Config.Rocket = {
 Config.MAX_BUILDING_LEVEL = 10
 Config.UPGRADE_COST_MULT = 1.6
 
--- Запуск ракеты: клавиша E / кнопка HUD открывают выбор цели (см. HudManager).
--- Стоять рядом с ракетой не нужно; ProximityPrompt больше не используется.
+-- Запуск ракеты: игрок подходит к своей установке и удерживает E
+-- (ProximityPrompt на клиенте, см. HudManager), после чего выбирает остров и точку
+-- удара. Сервер (RocketManager) независимо проверяет, что стрелок реально стоит
+-- рядом со своей установкой — не дальше LAUNCH_MAX_DISTANCE студов по горизонтали.
+Config.LAUNCH_MAX_DISTANCE = 30
 
 Config.FARM_TYPES = {
 	[1] = {
