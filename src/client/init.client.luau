@@ -7,6 +7,7 @@ local HudManager = require(script:WaitForChild("HudManager"))
 local RocketAnim = require(script:WaitForChild("RocketAnim"))
 local VisualFX   = require(script:WaitForChild("VisualFX"))
 local PriceTags  = require(script:WaitForChild("PriceTags"))
+local Sprint     = require(script:WaitForChild("Sprint"))
 
 -- Получение настроек анимации
 local getAnimFn = Remotes.Get("GetAnimSetting")
@@ -18,6 +19,9 @@ end)
 -- Инициализация HUD и ценников (видны только на своём острове)
 HudManager.Init(animEnabled)
 PriceTags.Init()
+
+-- Спринт на Shift: персонаж бежит немного быстрее
+Sprint.Init()
 
 -- Камера стрелка следует за запущенной сервером ракетой
 local rocketFollow = Remotes.Get("RocketFollow")

@@ -8,19 +8,52 @@ Config.FARM_INTERVAL = 4
 -- puts Humanoids into Swimming state while their character is in this water.
 Config.WATER_LEVEL = 18
 Config.SEABED_LEVEL = -58
-Config.WORLD_SIZE = 2400
-Config.PLOT_CENTER_SIZE = 108
-Config.SLOT_PLATFORM_SIZE = 46
+Config.WORLD_SIZE = 2600
 
--- Each launcher stores one rocket and reloads independently after firing.
+-- v3: острова стали заметно крупнее (сам пляж, площадки зданий и радиус их разлёта).
+Config.PLOT_CENTER_SIZE = 160
+Config.SLOT_PLATFORM_SIZE = 56
+Config.SLOT_RADIUS = 125
+
+-- Передвижение: обычный бег и спринт на Shift (клиент, см. Sprint.luau).
+Config.WALK_SPEED = 16
+Config.SPRINT_SPEED = 23
+
+-- Ракетные установки: РОВНО 4 стенда на острове. Первый даётся бесплатно.
+-- Покупка следующего стенда и прокачка купленных — наступанием на зелёный круг
+-- перед стендом (см. PlotManager rocketPads + RocketManager.OnPadStep).
 Config.START_LAUNCHERS = 1
-Config.MAX_LAUNCHERS = 6
-Config.LAUNCHER_COSTS = { 0, 250, 650, 1500, 3500, 8000 }
+Config.MAX_LAUNCHERS = 4
+Config.LAUNCHER_COSTS = { 0, 500, 2000, 6000 }
+
 Config.ROCKET_RELOAD = 12
-Config.ROCKET_DAMAGE = 150
+Config.ROCKET_DAMAGE = 150 -- базовый урон на уровне 1
 Config.ROCKET_SPEED = 115
 Config.ROCKET_ANIM_TIME = 3.2
 Config.ROCKET_ARC = 95
+
+-- Прокачка ракеты: каждый стенд качается отдельно. Урон растёт с уровнем,
+-- а КАЖДЫЕ 5 УРОВНЕЙ ракета меняет внешний вид (Mark I..IV): 1-4 / 5-9 / 10-14 / 15.
+Config.MAX_ROCKET_LEVEL = 15
+Config.ROCKET_UPGRADE_BASE = 180
+Config.ROCKET_UPGRADE_MULT = 1.45
+
+-- Стоимость прокачки ракеты до уровня nextLevel (nextLevel >= 2).
+function Config.RocketUpgradeCost(nextLevel)
+	if nextLevel < 2 or nextLevel > Config.MAX_ROCKET_LEVEL then
+		return math.huge
+	end
+	return math.floor(Config.ROCKET_UPGRADE_BASE * (Config.ROCKET_UPGRADE_MULT ^ (nextLevel - 2)) + 0.5)
+end
+
+-- Поколение (внешний вид) ракеты для уровня: меняется на уровнях 5, 10 и 15.
+function Config.RocketMark(level)
+	return math.clamp(math.floor((level or 1) / 5) + 1, 1, 4)
+end
+
+function Config.RocketDamageForLevel(level)
+	return math.floor(Config.ROCKET_DAMAGE * (1 + 0.25 * ((level or 1) - 1)) + 0.5)
+end
 
 -- Прилёт ракеты: если точка удара попадает в радиус ImpactRadius от здания,
 -- у здания отключается доход на DisableDuration секунд (см. FarmManager.DisableSlot).
@@ -31,14 +64,13 @@ Config.Rocket = {
 
 -- Прокачка зданий: каждое здание можно улучшать до MAX_BUILDING_LEVEL.
 -- Стоимость следующего уровня = базовая цена * UPGRADE_COST_MULT^(текущий уровень),
--- доход здания = базовый доход * уровень.
+-- доход здания = базовый доход * уровень. Визуально дом растёт: уровень = этажи.
 Config.MAX_BUILDING_LEVEL = 10
 Config.UPGRADE_COST_MULT = 1.6
 
--- Запуск ракеты: игрок подходит к своей установке и удерживает E
--- (ProximityPrompt на клиенте, см. HudManager), после чего выбирает остров и точку
--- удара. Сервер (RocketManager) независимо проверяет, что стрелок реально стоит
--- рядом со своей установкой — не дальше LAUNCH_MAX_DISTANCE студов по горизонтали.
+-- Запуск ракеты: игрок подходит к своей установке и удерживает E, после чего камера
+-- сразу переносится к вражеским островам (без бокового меню, см. HudManager).
+-- Сервер независимо проверяет, что стрелок реально стоит рядом со своей установкой.
 Config.LAUNCH_MAX_DISTANCE = 30
 
 Config.FARM_TYPES = {
@@ -89,29 +121,26 @@ Config.FARM_TYPES = {
 	},
 }
 
--- Twelve islands leave enough separation for boat/swimming travel and battle sightlines.
-Config.PLOT_POSITIONS = {
-	Vector3.new(-540, 28, -540),
-	Vector3.new(-180, 28, -620),
-	Vector3.new(180, 28, -620),
-	Vector3.new(540, 28, -540),
-	Vector3.new(-620, 28, -180),
-	Vector3.new(620, 28, -180),
-	Vector3.new(-620, 28, 180),
-	Vector3.new(620, 28, 180),
-	Vector3.new(-540, 28, 540),
-	Vector3.new(-180, 28, 620),
-	Vector3.new(180, 28, 620),
-	Vector3.new(540, 28, 540),
-}
+-- ВОСЕМЬ островов кольцом вокруг ПУСТОГО центра карты (центральный остров убран,
+-- в открытой воде по центру кружат акулы).
+local RING_RADIUS = 660
+Config.PLOT_POSITIONS = {}
+for i = 1, 8 do
+	local a = math.rad((i - 1) * 45)
+	Config.PLOT_POSITIONS[i] = Vector3.new(
+		math.floor(math.cos(a) * RING_RADIUS + 0.5),
+		28,
+		math.floor(math.sin(a) * RING_RADIUS + 0.5)
+	)
+end
 
-local radius = 82
+local slotRadius = Config.SLOT_RADIUS
 Config.SLOT_OFFSETS = {
-	[1] = Vector3.new(0, 0, -radius),
-	[2] = Vector3.new(radius * math.cos(math.rad(18)), 0, -radius * math.sin(math.rad(18))),
-	[3] = Vector3.new(radius * math.cos(math.rad(-54)), 0, radius * math.sin(math.rad(54))),
-	[4] = Vector3.new(-radius * math.cos(math.rad(-54)), 0, radius * math.sin(math.rad(54))),
-	[5] = Vector3.new(-radius * math.cos(math.rad(18)), 0, -radius * math.sin(math.rad(18))),
+	[1] = Vector3.new(0, 0, -slotRadius),
+	[2] = Vector3.new(slotRadius * math.cos(math.rad(18)), 0, -slotRadius * math.sin(math.rad(18))),
+	[3] = Vector3.new(slotRadius * math.cos(math.rad(-54)), 0, slotRadius * math.sin(math.rad(54))),
+	[4] = Vector3.new(-slotRadius * math.cos(math.rad(-54)), 0, slotRadius * math.sin(math.rad(54))),
+	[5] = Vector3.new(-slotRadius * math.cos(math.rad(18)), 0, -slotRadius * math.sin(math.rad(18))),
 }
 
 -- Стоимость улучшения здания слота до уровня nextLevel (nextLevel >= 2).
@@ -129,14 +158,14 @@ function Config.IncomeForLevel(tier, level)
 	return base.income * level
 end
 
-Config.SILO_OFFSET = Vector3.new(0, 0, 0)
+-- Стенды ракет — линия на северной стороне острова. Зелёный круг покупки/прокачки
+-- стоит ПЕРЕД каждым стендом, на LAUNCHER_PAD_FORWARD ближе к центру острова.
 Config.LAUNCHER_OFFSETS = {
-	Vector3.new(-18, 0, -8),
-	Vector3.new(0, 0, -8),
-	Vector3.new(18, 0, -8),
-	Vector3.new(-18, 0, 12),
-	Vector3.new(0, 0, 12),
-	Vector3.new(18, 0, 12),
+	Vector3.new(-36, 0, -30),
+	Vector3.new(-12, 0, -30),
+	Vector3.new(12, 0, -30),
+	Vector3.new(36, 0, -30),
 }
+Config.LAUNCHER_PAD_FORWARD = 16
 
 return Config

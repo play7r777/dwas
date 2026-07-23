@@ -22,6 +22,29 @@
           "Glare": 0.12,
           "Haze": 0.8
         }
+      },
+      "Bloom": {
+        "$className": "BloomEffect",
+        "$properties": {
+          "Intensity": 0.35,
+          "Size": 24,
+          "Threshold": 1.08
+        }
+      },
+      "SunRays": {
+        "$className": "SunRaysEffect",
+        "$properties": {
+          "Intensity": 0.06,
+          "Spread": 0.8
+        }
+      },
+      "ColorGrade": {
+        "$className": "ColorCorrectionEffect",
+        "$properties": {
+          "Saturation": 0.06,
+          "Contrast": 0.04,
+          "TintColor": [1.0, 0.99, 0.97]
+        }
       }
     },
     "ReplicatedStorage": {

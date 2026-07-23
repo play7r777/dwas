@@ -1,4 +1,8 @@
 -- FarmManager.luau — Строительство зданий, логика доходов, получение урона и КД восстановления
+--
+-- v3: здания мини-городка полностью переработаны. Дом растёт ВВЕРХ с прокачкой
+-- (уровень = количество этажей), у каждого тира свой архитектурный стиль, вокруг
+-- дома — дорожка, фонари и кусты ("мини-городок" на каждой площадке).
 local Players           = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local sharedFolder      = ReplicatedStorage:WaitForChild("Shared", 10)
@@ -10,10 +14,30 @@ local PlotManager       = require(script.Parent:WaitForChild("PlotManager"))
 
 local FarmManager = {}
 
--- plotFarms[plotId][slotIndex] = { tier, hp, maxHp, alive, rebuildTimer, folder, body, hpBar, statusLabel }
+-- plotFarms[plotId][slotIndex] = { tier, level, hp, maxHp, alive, rebuildTimer, folder, body, hpBar, statusLabel }
 local plotFarms = {}
 
--- Генерация кусочка суши и моста при покупке слота
+local function makeDecorPart(parent, name, size, cframe, color, material)
+	local part = Instance.new("Part")
+	part.Name = name
+	part.Anchored = true
+	part.Size = size
+	part.CFrame = cframe
+	part.Color = color
+	part.Material = material
+	part.TopSurface = Enum.SurfaceType.Smooth
+	part.BottomSurface = Enum.SurfaceType.Smooth
+	part.Parent = parent
+	return part
+end
+
+local function makeDecorCylinder(parent, name, height, diameter, position, color, material)
+	local part = makeDecorPart(parent, name, Vector3.new(height, diameter, diameter), CFrame.new(position) * CFrame.Angles(0, 0, math.rad(90)), color, material)
+	part.Shape = Enum.PartType.Cylinder
+	return part
+end
+
+-- Генерация кусочка суши, моста и мини-городка при покупке слота
 local function buildTerritory(plotId, slotIndex)
 	local plot = PlotManager.GetPlot(plotId)
 	local slotInfo = plot.slots[slotIndex]
@@ -72,35 +96,100 @@ local function buildTerritory(plotId, slotIndex)
 	top.Material = Enum.Material.Sand
 	top.Parent = territoryFolder
 
+	-- === Мини-городок вокруг будущего дома: дорожка, фонари, кусты ===
+	local up = Vector3.new(0, 1, 0)
+	local toCenter = Vector3.new(plot.center.X - center.X, 0, plot.center.Z - center.Z)
+	toCenter = toCenter.Magnitude > 0.001 and toCenter.Unit or Vector3.new(0, 0, -1)
+	local side = toCenter:Cross(up)
+	local sandTop = center.Y + 9.5 -- верх песчаного диска площадки
+	local flatCenter = Vector3.new(center.X, sandTop, center.Z)
+
+	-- Дорожка из плит от моста к крыльцу дома
+	for i = 1, 3 do
+		local r = Config.SLOT_PLATFORM_SIZE / 2 - 4 - (i - 1) * 6
+		local tilePos = flatCenter + toCenter * r + Vector3.new(0, 0.15, 0)
+		makeDecorPart(territoryFolder, "PathTile_" .. i, Vector3.new(3.6, 0.3, 4.4), CFrame.lookAt(tilePos, tilePos + toCenter), Color3.fromRGB(196, 186, 168), Enum.Material.Concrete)
+	end
+
+	-- Пара уличных фонарей у дорожки (тёплый свет вечером)
+	for _, s in ipairs({ -1, 1 }) do
+		local lampBase = flatCenter + toCenter * 19 + side * (s * 6)
+		makeDecorCylinder(territoryFolder, "LampPole", 5.4, 0.5, lampBase + Vector3.new(0, 2.7, 0), Color3.fromRGB(52, 56, 62), Enum.Material.Metal)
+		local bulb = makeDecorPart(territoryFolder, "LampBulb", Vector3.new(1.1, 1.1, 1.1), CFrame.new(lampBase + Vector3.new(0, 5.7, 0)), Color3.fromRGB(255, 214, 120), Enum.Material.Neon)
+		bulb.Shape = Enum.PartType.Ball
+		bulb.CanCollide = false
+		local light = Instance.new("PointLight")
+		light.Color = Color3.fromRGB(255, 208, 120)
+		light.Brightness = 0.9
+		light.Range = 15
+		light.Parent = bulb
+	end
+
+	-- Кусты вокруг дома (не залезают в стены: отступ от полуширины дома тира)
+	local tier = slotIndex
+	local halfWidth = (16 + tier * 2) / 2
+	local bushOffsets = {
+		side * (halfWidth + 2.5) + toCenter * 2,
+		side * -(halfWidth + 2.5) + toCenter * 2,
+		toCenter * -(halfWidth + 5) + side * 5,
+	}
+	for i, off in ipairs(bushOffsets) do
+		local bush = makeDecorPart(territoryFolder, "Bush_" .. i, Vector3.new(3, 2.4, 3), CFrame.new(flatCenter + off + Vector3.new(0, 1, 0)), Color3.fromRGB(78, 152, 88), Enum.Material.Grass)
+		bush.Shape = Enum.PartType.Ball
+		bush.CanCollide = false
+	end
+
 	return territoryFolder
 end
 
--- Уникальные 3D модели зданий. baseCF ставит дом фасадом (входом) к центру острова,
--- чтобы дом не стоял "задом" к своему острову (фикс ориентации красного дома).
+-- Архитектурные стили пяти тиров зданий мини-городка.
+local TIER_STYLES = {
+	[1] = { -- пляжный дом: дерево и терракотовая крыша
+		wall = Color3.fromRGB(226, 202, 160), wallMat = Enum.Material.WoodPlanks,
+		trim = Color3.fromRGB(140, 100, 62), roof = Color3.fromRGB(186, 88, 56), roofStyle = "gable",
+		glass = Color3.fromRGB(150, 214, 232), glassMat = Enum.Material.Glass,
+	},
+	[2] = { -- прибрежный коттедж: пастельные стены, серо-синяя крыша
+		wall = Color3.fromRGB(216, 236, 229), wallMat = Enum.Material.SmoothPlastic,
+		trim = Color3.fromRGB(74, 112, 122), roof = Color3.fromRGB(62, 112, 128), roofStyle = "gable",
+		glass = Color3.fromRGB(140, 210, 230), glassMat = Enum.Material.Glass,
+	},
+	[3] = { -- белая вилла: плоская крыша с садом
+		wall = Color3.fromRGB(246, 246, 240), wallMat = Enum.Material.SmoothPlastic,
+		trim = Color3.fromRGB(190, 194, 198), roof = Color3.fromRGB(232, 234, 238), roofStyle = "flat",
+		glass = Color3.fromRGB(110, 205, 235), glassMat = Enum.Material.Glass,
+	},
+	[4] = { -- модерновый особняк: тёмный корпус, янтарное остекление, маяк
+		wall = Color3.fromRGB(54, 60, 68), wallMat = Enum.Material.SmoothPlastic,
+		trim = Color3.fromRGB(120, 126, 134), roof = Color3.fromRGB(44, 48, 54), roofStyle = "flat",
+		glass = Color3.fromRGB(255, 152, 48), glassMat = Enum.Material.Neon, beacon = true,
+	},
+	[5] = { -- резиденция: башня с вертолётной площадкой и неоном
+		wall = Color3.fromRGB(236, 240, 246), wallMat = Enum.Material.SmoothPlastic,
+		trim = Color3.fromRGB(214, 178, 96), roof = Color3.fromRGB(226, 230, 238), roofStyle = "helipad",
+		glass = Color3.fromRGB(242, 92, 190), glassMat = Enum.Material.Neon,
+	},
+}
+
+-- Уникальные 3D модели зданий. Уровень прокачки = количество этажей: дом растёт
+-- вверх с каждым уровнем. baseCF ставит дом фасадом (входом) к центру острова.
 local function buildBuildingModel(plotId, slotIndex, tier, level, territoryFolder)
 	local plot = PlotManager.GetPlot(plotId)
 	local slotCenter = plot.slots[slotIndex].center + Vector3.new(0, 10, 0)
 	-- Дверь/фасад дома смотрит по локальной -Z; направляем -Z на центр острова (к мосту).
 	local baseCF = CFrame.lookAt(slotCenter, Vector3.new(plot.center.X, slotCenter.Y, plot.center.Z))
 
-	local config = Config.FARM_TYPES[tier]
+	local style = TIER_STYLES[tier]
 	local income = Config.IncomeForLevel(tier, level)
 	local home = Instance.new("Model")
 	home.Name = "IncomeHome_" .. slotIndex
 	home:SetAttribute("Alive", true)
 	home.Parent = territoryFolder
 
-	local palettes = {
-		{ wall = Color3.fromRGB(244, 226, 192), roof = Color3.fromRGB(174, 70, 50), trim = Color3.fromRGB(115, 76, 48) },
-		{ wall = Color3.fromRGB(219, 231, 222), roof = Color3.fromRGB(67, 105, 119), trim = Color3.fromRGB(77, 67, 52) },
-		{ wall = Color3.fromRGB(238, 221, 192), roof = Color3.fromRGB(107, 81, 151), trim = Color3.fromRGB(83, 60, 46) },
-		{ wall = Color3.fromRGB(239, 232, 212), roof = Color3.fromRGB(190, 104, 43), trim = Color3.fromRGB(93, 60, 38) },
-		{ wall = Color3.fromRGB(223, 224, 230), roof = Color3.fromRGB(67, 75, 92), trim = Color3.fromRGB(57, 52, 48) },
-	}
-	local palette = palettes[tier]
 	local width = 16 + tier * 2
 	local depth = 14 + tier * 2
-	local wallHeight = 9 + tier
+	local storeyH = 4.6
+	local floors = math.clamp(level, 1, Config.MAX_BUILDING_LEVEL)
 
 	-- lp — все смещения ЛОКАЛЬНЫЕ относительно пола дома (baseCF), пол на локальном y=0.
 	local function lp(name, size, dx, dy, dz, color, material, angles)
@@ -119,56 +208,111 @@ local function buildBuildingModel(plotId, slotIndex, tier, level, territoryFolde
 		return instance
 	end
 
-	local wallY = wallHeight / 2 + 0.5   -- ЛОКАЛЬНАЯ высота центра стен
-	local roofY = wallHeight + 2          -- ЛОКАЛЬНАЯ высота конька крыши (сидит на стенах)
+	-- Каменное основание (чуть шире дома, слегка утоплено в песок)
+	lp("Foundation", Vector3.new(width + 2, 1.2, depth + 2), 0, 0, 0, Color3.fromRGB(168, 162, 152), Enum.Material.Concrete)
 
-	lp("Floor", Vector3.new(width, 1, depth), 0, 0, 0, Color3.fromRGB(126, 91, 54), Enum.Material.WoodPlanks)
-	lp("BackWall", Vector3.new(width, wallHeight, 1), 0, wallY, depth / 2, palette.wall, Enum.Material.Plaster)
-	lp("LeftWall", Vector3.new(1, wallHeight, depth), -width / 2, wallY, 0, palette.wall, Enum.Material.Plaster)
-	lp("RightWall", Vector3.new(1, wallHeight, depth), width / 2, wallY, 0, palette.wall, Enum.Material.Plaster)
+	-- Этажи: четыре стены + ленточное остекление на каждом этаже.
+	for f = 1, floors do
+		local y0 = 0.6 + (f - 1) * storeyH -- низ этажа
+		local wallY = y0 + storeyH / 2
+		local bandY = y0 + storeyH * 0.62
 
-	-- Фасад со сквозным дверным проёмом.
-	local sideWidth = (width - 5) / 2
-	lp("FrontWallLeft", Vector3.new(sideWidth, wallHeight, 1), -(5 + sideWidth) / 2, wallY, -depth / 2, palette.wall, Enum.Material.Plaster)
-	lp("FrontWallRight", Vector3.new(sideWidth, wallHeight, 1), (5 + sideWidth) / 2, wallY, -depth / 2, palette.wall, Enum.Material.Plaster)
-	lp("DoorHeader", Vector3.new(5, 2.4, 1), 0, wallHeight - 0.7, -depth / 2, palette.trim, Enum.Material.Wood)
+		lp("Wall_B" .. f, Vector3.new(width, storeyH, 1), 0, wallY, depth / 2, style.wall, style.wallMat)
+		lp("Wall_L" .. f, Vector3.new(1, storeyH, depth), -width / 2, wallY, 0, style.wall, style.wallMat)
+		lp("Wall_R" .. f, Vector3.new(1, storeyH, depth), width / 2, wallY, 0, style.wall, style.wallMat)
 
-	-- Двускатная крыша должна образовывать КОНЁК (пик /\), а не ложбину (\/):
-	-- у обоих скатов внутренний край (к центру дома) выше внешнего. Раньше знаки
-	-- наклона были перевёрнуты — главный скат выглядел как "\" вместо "/".
-	local roofLeft = lp("RoofLeft", Vector3.new(width / 2 + 1, 1, depth + 2), -width / 4, roofY, 0, palette.roof, Enum.Material.Slate, CFrame.Angles(0, 0, math.rad(24)))
-	lp("RoofRight", Vector3.new(width / 2 + 1, 1, depth + 2), width / 4, roofY, 0, palette.roof, Enum.Material.Slate, CFrame.Angles(0, 0, math.rad(-24)))
-	lp("Chimney", Vector3.new(2.2, 7, 2.2), width * 0.27, roofY + 3, 2, Color3.fromRGB(92, 80, 71), Enum.Material.Brick)
+		local sideW = (width - 5) / 2
+		if f == 1 then
+			-- Фасад первого этажа со сквозным дверным проёмом
+			lp("Wall_FL", Vector3.new(sideW, storeyH, 1), -(5 + sideW) / 2, wallY, -depth / 2, style.wall, style.wallMat)
+			lp("Wall_FR", Vector3.new(sideW, storeyH, 1), (5 + sideW) / 2, wallY, -depth / 2, style.wall, style.wallMat)
+			lp("DoorHeader", Vector3.new(5, storeyH - 3.4, 1), 0, y0 + storeyH - (storeyH - 3.4) / 2, -depth / 2, style.trim, Enum.Material.Wood)
+		else
+			lp("Wall_F" .. f, Vector3.new(width, storeyH, 1), 0, wallY, -depth / 2, style.wall, style.wallMat)
+		end
 
-	for _, side in ipairs({ -1, 1 }) do
-		for _, z in ipairs({ -depth * 0.22, depth * 0.22 }) do
-			local window = lp("Window", Vector3.new(0.25, 3.2, 3.4), side * (width / 2 + 0.52), wallY, z, Color3.fromRGB(133, 210, 226), Enum.Material.Glass)
-			window.Transparency = 0.25
+		-- Ленточное остекление: полосы чуть отстоят от стен (нет копланарных граней)
+		if f == 1 then
+			lp("Band_FL" .. f, Vector3.new(sideW * 0.7, 1.5, 0.3), -(5 + sideW) / 2, bandY, -depth / 2 - 0.68, style.glass, style.glassMat)
+			lp("Band_FR" .. f, Vector3.new(sideW * 0.7, 1.5, 0.3), (5 + sideW) / 2, bandY, -depth / 2 - 0.68, style.glass, style.glassMat)
+		else
+			lp("Band_F" .. f, Vector3.new(width * 0.8, 1.5, 0.3), 0, bandY, -depth / 2 - 0.68, style.glass, style.glassMat)
+		end
+		lp("Band_B" .. f, Vector3.new(width * 0.8, 1.5, 0.3), 0, bandY, depth / 2 + 0.68, style.glass, style.glassMat)
+		lp("Band_L" .. f, Vector3.new(0.3, 1.5, depth * 0.8), -width / 2 - 0.68, bandY, 0, style.glass, style.glassMat)
+		lp("Band_R" .. f, Vector3.new(0.3, 1.5, depth * 0.8), width / 2 + 0.68, bandY, 0, style.glass, style.glassMat)
+
+		-- Межэтажный карниз
+		if f < floors then
+			lp("Slab" .. f, Vector3.new(width + 0.8, 0.35, depth + 0.8), 0, y0 + storeyH, 0, style.trim, Enum.Material.SmoothPlastic)
 		end
 	end
 
+	local wallsTop = 0.6 + floors * storeyH
+
+	-- Угловые пилястры на всю высоту — здание выглядит собранным, а не "коробкой"
+	for _, sx in ipairs({ -1, 1 }) do
+		for _, sz in ipairs({ -1, 1 }) do
+			lp("Pillar", Vector3.new(1.4, wallsTop, 1.4), sx * (width / 2), wallsTop / 2, sz * (depth / 2), style.trim, Enum.Material.SmoothPlastic)
+		end
+	end
+
+	-- Крыльцо с навесом
 	lp("Porch", Vector3.new(7, 0.7, 5), 0, 0.25, -depth / 2 - 2.5, Color3.fromRGB(128, 89, 50), Enum.Material.WoodPlanks)
 	for _, x in ipairs({ -2.8, 2.8 }) do
-		lp("PorchPost", Vector3.new(0.7, 5, 0.7), x, 2.7, -depth / 2 - 4.3, palette.trim, Enum.Material.Wood)
+		lp("PorchPost", Vector3.new(0.7, 4.6, 0.7), x, 3.1, -depth / 2 - 4.3, style.trim, Enum.Material.Wood)
 	end
-	lp("PorchRoof", Vector3.new(8, 0.7, 3), 0, 5.4, -depth / 2 - 3.2, palette.roof, Enum.Material.Slate, CFrame.Angles(math.rad(8), 0, 0))
+	lp("PorchRoof", Vector3.new(8, 0.6, 3.4), 0, 5.6, -depth / 2 - 3.2, style.roof, Enum.Material.Slate, CFrame.Angles(math.rad(8), 0, 0))
 
-	if tier >= 3 then
-		lp("SideRoom", Vector3.new(7, 7, 7), width / 2 + 3.5, 4, depth * 0.18, palette.wall, Enum.Material.Plaster)
-		-- Малый скат пристройки тоже был перевёрнут ("\"); разворачиваем в "/".
-		lp("SideRoof", Vector3.new(9, 1, 9), width / 2 + 3.5, 8.5, depth * 0.18, palette.roof, Enum.Material.Slate, CFrame.Angles(0, 0, math.rad(-18)))
-	end
-	if tier >= 4 then
-		local balcony = lp("Balcony", Vector3.new(7, 0.6, 4), 0, wallHeight * 0.63, depth / 2 + 2, palette.trim, Enum.Material.WoodPlanks)
-		balcony.CanCollide = true
+	-- Крыша по стилю тира
+	local roofCore
+	if style.roofStyle == "gable" then
+		-- Двускатная крыша с КОНЬКОМ (пик /\): внутренние края скатов выше внешних.
+		roofCore = lp("RoofLeft", Vector3.new(width / 2 + 1, 1, depth + 2), -width / 4, wallsTop + 1.4, 0, style.roof, Enum.Material.Slate, CFrame.Angles(0, 0, math.rad(24)))
+		lp("RoofRight", Vector3.new(width / 2 + 1, 1, depth + 2), width / 4, wallsTop + 1.4, 0, style.roof, Enum.Material.Slate, CFrame.Angles(0, 0, math.rad(-24)))
+		lp("Chimney", Vector3.new(2.2, 5.5, 2.2), width * 0.27, wallsTop + 3.4, 2, Color3.fromRGB(96, 84, 74), Enum.Material.Brick)
+	else
+		-- Плоская крыша с парапетом
+		roofCore = lp("RoofSlab", Vector3.new(width + 1.4, 0.8, depth + 1.4), 0, wallsTop + 0.4, 0, style.roof, Enum.Material.SmoothPlastic)
+		lp("ParapetF", Vector3.new(width + 1.4, 1.1, 0.5), 0, wallsTop + 1.3, -(depth + 0.9) / 2, style.trim, Enum.Material.SmoothPlastic)
+		lp("ParapetB", Vector3.new(width + 1.4, 1.1, 0.5), 0, wallsTop + 1.3, (depth + 0.9) / 2, style.trim, Enum.Material.SmoothPlastic)
+		lp("ParapetL", Vector3.new(0.5, 1.1, depth + 1.4), -(width + 0.9) / 2, wallsTop + 1.3, 0, style.trim, Enum.Material.SmoothPlastic)
+		lp("ParapetR", Vector3.new(0.5, 1.1, depth + 1.4), (width + 0.9) / 2, wallsTop + 1.3, 0, style.trim, Enum.Material.SmoothPlastic)
+
+		if style.roofStyle == "helipad" then
+			local padD = math.min(width, depth) * 0.72
+			local helipad = lp("Helipad", Vector3.new(0.35, padD, padD), 0, wallsTop + 1.0, 0, Color3.fromRGB(58, 62, 70), Enum.Material.SmoothPlastic, CFrame.Angles(0, 0, math.rad(90)))
+			helipad.Shape = Enum.PartType.Cylinder
+			local ring = lp("HelipadRing", Vector3.new(0.15, padD + 1.6, padD + 1.6), 0, wallsTop + 1.55, 0, style.glass, Enum.Material.Neon, CFrame.Angles(0, 0, math.rad(90)))
+			ring.Shape = Enum.PartType.Cylinder
+			ring.Transparency = 0.25
+			ring.CanCollide = false
+			lp("Spire", Vector3.new(0.6, 8, 0.6), -width * 0.32, wallsTop + 4.6, depth * 0.3, style.trim, Enum.Material.Metal)
+			local orb = lp("SpireOrb", Vector3.new(1.4, 1.4, 1.4), -width * 0.32, wallsTop + 9, depth * 0.3, style.glass, Enum.Material.Neon)
+			orb.Shape = Enum.PartType.Ball
+			orb.CanCollide = false
+		else
+			-- Сад на плоской крыше
+			for i, off in ipairs({ { -width * 0.25, -depth * 0.2 }, { width * 0.28, depth * 0.22 }, { -width * 0.1, depth * 0.28 } }) do
+				local bush = lp("RoofBush_" .. i, Vector3.new(2.4, 2, 2.4), off[1], wallsTop + 1.9, off[2], Color3.fromRGB(74, 150, 84), Enum.Material.Grass)
+				bush.Shape = Enum.PartType.Ball
+				bush.CanCollide = false
+			end
+			if style.beacon then
+				lp("Antenna", Vector3.new(0.4, 6, 0.4), width * 0.3, wallsTop + 3.8, depth * 0.25, Color3.fromRGB(200, 204, 210), Enum.Material.Metal)
+				local beacon = lp("Beacon", Vector3.new(0.9, 0.9, 0.9), width * 0.3, wallsTop + 7, depth * 0.25, Color3.fromRGB(255, 70, 60), Enum.Material.Neon)
+				beacon.Shape = Enum.PartType.Ball
+				beacon.CanCollide = false
+			end
+		end
 	end
 
 	local gui = Instance.new("BillboardGui")
 	gui.Name = "StatusGui"
 	gui.Size = UDim2.new(0, 150, 0, 30)
-	gui.StudsOffset = Vector3.new(0, wallHeight + 5, 0)
+	gui.StudsOffset = Vector3.new(0, 6, 0)
 	gui.AlwaysOnTop = false
-	gui.Parent = roofLeft
+	gui.Parent = roofCore
 	local statusLabel = Instance.new("TextLabel")
 	statusLabel.Size = UDim2.new(1, 0, 1, 0)
 	statusLabel.BackgroundTransparency = 1
@@ -179,204 +323,7 @@ local function buildBuildingModel(plotId, slotIndex, tier, level, territoryFolde
 	statusLabel.Font = Enum.Font.GothamBold
 	statusLabel.Parent = gui
 
-	return home, roofLeft, nil, statusLabel
-end
-
-local function buildLegacyBuildingModel(plotId, slotIndex, tier, territoryFolder)
-	local plot = PlotManager.GetPlot(plotId)
-	local slotInfo = plot.slots[slotIndex]
-	local center = slotInfo.center
-	local farmConfig = Config.FARM_TYPES[tier]
-
-	local farmFolder = Instance.new("Folder")
-	farmFolder.Name = "FarmSlot_" .. slotIndex
-	farmFolder:SetAttribute("Alive", true)
-	farmFolder.Parent = territoryFolder
-
-	local mainBody -- Центральная часть для Gui
-
-	-- База для всех зданий
-	local base = Instance.new("Part")
-	base.Anchored = true
-	base.Size = Vector3.new(16, 1, 16)
-	base.Position = center + Vector3.new(0, 2.5, 0)
-	base.Color = Color3.fromRGB(40, 40, 45)
-	base.Material = Enum.Material.DiamondPlate
-	base.Parent = farmFolder
-	mainBody = base
-
-	local heightOffset = 3
-
-	if tier == 1 then
-		-- Солнечная ферма
-		local pillar = Instance.new("Part")
-		pillar.Anchored = true
-		pillar.Size = Vector3.new(2, 8, 2)
-		pillar.Position = base.Position + Vector3.new(0, 4, 0)
-		pillar.Color = Color3.fromRGB(150, 150, 150)
-		pillar.Parent = farmFolder
-
-		local panel = Instance.new("Part")
-		panel.Anchored = true
-		panel.Size = Vector3.new(12, 0.5, 12)
-		panel.CFrame = CFrame.new(pillar.Position + Vector3.new(0, 4, 0)) * CFrame.Angles(math.rad(30), 0, 0)
-		panel.Color = farmConfig.color
-		panel.Material = farmConfig.material
-		panel.Parent = farmFolder
-		mainBody = panel
-		heightOffset = 5
-
-	elseif tier == 2 then
-		-- Кристальная шахта
-		mainBody = Instance.new("Part")
-		mainBody.Anchored = true
-		mainBody.Size = Vector3.new(10, 6, 10)
-		mainBody.Position = base.Position + Vector3.new(0, 3, 0)
-		mainBody.Color = Color3.fromRGB(60, 50, 60)
-		mainBody.Material = Enum.Material.Slate
-		mainBody.Parent = farmFolder
-
-		for i = 1, 4 do
-			local crystal = Instance.new("Part")
-			crystal.Anchored = true
-			crystal.Shape = Enum.PartType.Ball
-			crystal.Size = Vector3.new(4, 12, 4)
-			crystal.CFrame = CFrame.new(mainBody.Position + Vector3.new(0, 4, 0)) * CFrame.Angles(math.rad(math.random(-30, 30)), math.rad(i * 90), math.rad(30))
-			crystal.Color = farmConfig.color
-			crystal.Material = Enum.Material.Neon
-			crystal.Parent = farmFolder
-		end
-		heightOffset = 10
-
-	elseif tier == 3 then
-		-- Био-Лаборатория
-		mainBody = Instance.new("Part")
-		mainBody.Anchored = true
-		mainBody.Shape = Enum.PartType.Cylinder
-		mainBody.Size = Vector3.new(10, 14, 14)
-		mainBody.Orientation = Vector3.new(0, 0, 90)
-		mainBody.Position = base.Position + Vector3.new(0, 5, 0)
-		mainBody.Color = Color3.fromRGB(150, 150, 150)
-		mainBody.Material = Enum.Material.Metal
-		mainBody.Parent = farmFolder
-
-		local dome = Instance.new("Part")
-		dome.Anchored = true
-		dome.Shape = Enum.PartType.Ball
-		dome.Size = Vector3.new(12, 12, 12)
-		dome.Position = mainBody.Position + Vector3.new(0, 2, 0)
-		dome.Color = Color3.fromRGB(200, 255, 200)
-		dome.Material = Enum.Material.Glass
-		dome.Transparency = 0.5
-		dome.Parent = farmFolder
-
-		local fluid = Instance.new("Part")
-		fluid.Anchored = true
-		fluid.Shape = Enum.PartType.Ball
-		fluid.Size = Vector3.new(8, 8, 8)
-		fluid.Position = dome.Position
-		fluid.Color = farmConfig.color
-		fluid.Material = Enum.Material.Neon
-		fluid.Parent = farmFolder
-		heightOffset = 9
-
-	elseif tier == 4 then
-		-- Плазменный генератор
-		mainBody = Instance.new("Part")
-		mainBody.Anchored = true
-		mainBody.Shape = Enum.PartType.Cylinder
-		mainBody.Size = Vector3.new(12, 8, 8)
-		mainBody.Orientation = Vector3.new(0, 0, 90)
-		mainBody.Position = base.Position + Vector3.new(0, 6, 0)
-		mainBody.Color = Color3.fromRGB(40, 40, 40)
-		mainBody.Material = Enum.Material.Metal
-		mainBody.Parent = farmFolder
-
-		local orb = Instance.new("Part")
-		orb.Anchored = true
-		orb.Shape = Enum.PartType.Ball
-		orb.Size = Vector3.new(8, 8, 8)
-		orb.Position = mainBody.Position + Vector3.new(0, 8, 0)
-		orb.Color = farmConfig.color
-		orb.Material = Enum.Material.Neon
-		orb.Parent = farmFolder
-		heightOffset = 18
-
-	elseif tier == 5 then
-		-- Квантовый реактор
-		mainBody = Instance.new("Part")
-		mainBody.Anchored = true
-		mainBody.Size = Vector3.new(10, 16, 10)
-		mainBody.Position = base.Position + Vector3.new(0, 8, 0)
-		mainBody.Color = Color3.fromRGB(20, 20, 20)
-		mainBody.Material = Enum.Material.Metal
-		mainBody.Parent = farmFolder
-
-		local ring = Instance.new("Part")
-		ring.Anchored = true
-		ring.Shape = Enum.PartType.Cylinder
-		ring.Size = Vector3.new(4, 20, 20)
-		ring.Orientation = Vector3.new(45, 45, 90)
-		ring.Position = mainBody.Position
-		ring.Color = farmConfig.color
-		ring.Material = Enum.Material.Neon
-		ring.CanCollide = false
-		ring.Parent = farmFolder
-
-		local core = Instance.new("Part")
-		core.Anchored = true
-		core.Shape = Enum.PartType.Ball
-		core.Size = Vector3.new(10, 10, 10)
-		core.Position = mainBody.Position
-		core.Color = farmConfig.color
-		core.Material = Enum.Material.ForceField
-		core.Parent = farmFolder
-		heightOffset = 12
-	end
-
-	-- 3D Информационная панель над зданием
-	local gui = Instance.new("BillboardGui")
-	gui.Name = "StatusGui"
-	gui.Size = UDim2.new(0, 180, 0, 50)
-	gui.StudsOffset = Vector3.new(0, heightOffset, 0)
-	gui.AlwaysOnTop = false
-	gui.Parent = mainBody
-
-	local nameLabel = Instance.new("TextLabel")
-	nameLabel.Size = UDim2.new(1, 0, 0, 18)
-	nameLabel.BackgroundTransparency = 1
-	nameLabel.Text = string.format("%s (Тир %d)", farmConfig.name, tier)
-	nameLabel.TextColor3 = Color3.fromRGB(255, 220, 50)
-	nameLabel.TextScaled = true
-	nameLabel.Font = Enum.Font.GothamBold
-	nameLabel.Parent = gui
-
-	local hpBg = Instance.new("Frame")
-	hpBg.Name = "HpBg"
-	hpBg.Size = UDim2.new(1, 0, 0, 12)
-	hpBg.Position = UDim2.new(0, 0, 0, 20)
-	hpBg.BackgroundColor3 = Color3.fromRGB(180, 40, 40)
-	hpBg.BorderSizePixel = 0
-	hpBg.Parent = gui
-
-	local hpBar = Instance.new("Frame")
-	hpBar.Name = "HpBar"
-	hpBar.Size = UDim2.new(1, 0, 1, 0)
-	hpBar.BackgroundColor3 = Color3.fromRGB(50, 220, 50)
-	hpBar.BorderSizePixel = 0
-	hpBar.Parent = hpBg
-
-	local statusLabel = Instance.new("TextLabel")
-	statusLabel.Size = UDim2.new(1, 0, 0, 14)
-	statusLabel.Position = UDim2.new(0, 0, 0, 34)
-	statusLabel.BackgroundTransparency = 1
-	statusLabel.Text = "+$" .. farmConfig.income
-	statusLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
-	statusLabel.TextScaled = true
-	statusLabel.Font = Enum.Font.GothamMedium
-	statusLabel.Parent = gui
-
-	return farmFolder, mainBody, hpBar, statusLabel
+	return home, roofCore, nil, statusLabel
 end
 
 -- Обновляет ценник над кнопкой: покупка / прокачка до след. уровня / макс.

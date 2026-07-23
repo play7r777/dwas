@@ -1,4 +1,4 @@
--- DataManager.luau - persistent money, launcher count, and player preferences
+-- DataManager.luau - persistent money, launcher count, rocket levels, and player preferences
 local Players          = game:GetService("Players")
 local DataStoreService = game:GetService("DataStoreService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -15,7 +15,12 @@ local moneyStore = DataStoreService:GetDataStore("TycoonMoney_v3")
 local animStore  = DataStoreService:GetDataStore("TycoonAnim_v3")
 
 local function defaultData()
-	return { money = Config.START_MONEY, launchers = Config.START_LAUNCHERS, animEnabled = true }
+	return {
+		money = Config.START_MONEY,
+		launchers = Config.START_LAUNCHERS,
+		rocketLevels = { 1 },
+		animEnabled = true,
+	}
 end
 
 local function load(player)
@@ -27,7 +32,13 @@ local function load(player)
 	local data = defaultData()
 	if ok and saved then
 		data.money = tonumber(saved.money) or data.money
+		-- Старые сейвы могли иметь до 6 установок — зажимаем в новый максимум (4).
 		data.launchers = math.clamp(tonumber(saved.launchers) or Config.START_LAUNCHERS, Config.START_LAUNCHERS, Config.MAX_LAUNCHERS)
+		local savedLevels = type(saved.rocketLevels) == "table" and saved.rocketLevels or {}
+		data.rocketLevels = {}
+		for index = 1, data.launchers do
+			data.rocketLevels[index] = math.clamp(tonumber(savedLevels[index]) or 1, 1, Config.MAX_ROCKET_LEVEL)
+		end
 	end
 
 	local ok2, animVal = pcall(function()
@@ -46,7 +57,7 @@ local function save(player)
 	local uid = tostring(player.UserId)
 	pcall(function()
 		moneyStore:UpdateAsync(uid, function()
-			return { money = data.money, launchers = data.launchers }
+			return { money = data.money, launchers = data.launchers, rocketLevels = data.rocketLevels }
 		end)
 	end)
 	pcall(function()
@@ -94,7 +105,6 @@ function DataManager.Init()
 		local data = playerData[player]
 		return data and data.animEnabled ~= false
 	end
-
 end
 
 function DataManager.GetData(player)
@@ -119,17 +129,43 @@ function DataManager.GetLauncherCount(player)
 	return data and data.launchers or 0
 end
 
+-- Уровень прокачки конкретного стенда (0 — стенд ещё не куплен).
+function DataManager.GetLauncherLevel(player, index)
+	local data = playerData[player]
+	if not data then return 0 end
+	if index < 1 or index > data.launchers then return 0 end
+	return data.rocketLevels[index] or 1
+end
+
 function DataManager.BuyNextLauncher(player)
 	local data = playerData[player]
 	if not data then return false, "Данные игрока загружаются" end
-	if data.launchers >= Config.MAX_LAUNCHERS then return false, "Все 6 установок уже построены" end
+	if data.launchers >= Config.MAX_LAUNCHERS then
+		return false, string.format("Все %d установки уже построены", Config.MAX_LAUNCHERS)
+	end
 	local nextCount = data.launchers + 1
 	local cost = Config.LAUNCHER_COSTS[nextCount]
 	if data.money < cost then return false, string.format("Нужно ещё $%d", cost - data.money) end
 	data.money -= cost
 	data.launchers = nextCount
+	data.rocketLevels[nextCount] = 1
 	DataManager.SendUpdate(player)
 	return true, nextCount
+end
+
+-- Прокачка купленного стенда на +1 уровень. Возвращает (true, новыйУровень) либо (false, причина).
+function DataManager.UpgradeLauncher(player, index)
+	local data = playerData[player]
+	if not data then return false, "Данные игрока загружаются" end
+	if index < 1 or index > data.launchers then return false, "Сначала купите эту установку" end
+	local level = data.rocketLevels[index] or 1
+	if level >= Config.MAX_ROCKET_LEVEL then return false, "Максимальный уровень ракеты" end
+	local cost = Config.RocketUpgradeCost(level + 1)
+	if data.money < cost then return false, string.format("Нужно ещё $%d", cost - data.money) end
+	data.money -= cost
+	data.rocketLevels[index] = level + 1
+	DataManager.SendUpdate(player)
+	return true, level + 1
 end
 
 function DataManager.SendUpdate(player)
@@ -139,6 +175,7 @@ function DataManager.SendUpdate(player)
 	ev:FireClient(player, {
 		money = data.money,
 		launchers = data.launchers,
+		rocketLevels = data.rocketLevels,
 		animEnabled = data.animEnabled,
 	})
 end

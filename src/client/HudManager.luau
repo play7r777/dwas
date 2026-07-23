@@ -1,16 +1,17 @@
--- HudManager.luau - экономика, статус установок и полный сценарий ракетного удара.
+-- HudManager.luau — деньги (внизу по центру), уведомления и сценарий ракетного удара.
 --
--- Сценарий запуска (см. также RocketManager на сервере):
---   1. Игрок подходит к своей ракетной установке и удерживает E (ProximityPrompt).
---   2. Открывается панель "РАКЕТНЫЙ УДАР" со списком допустимых островов-целей.
---   3. Выбор острова наводит камеру на него и включает выбор точки удара кликом.
---   4. Клик по острову ставит маркер удара; точку можно переставить или отменить.
---   5. Кнопка "ЗАПУСК" шлёт LaunchRocket(targetPlotId, targetPos) на сервер.
+-- Сценарий запуска (v3, без бокового меню):
+--   1. Игрок подходит к своей установке и удерживает E (ProximityPrompt).
+--   2. Камера СРАЗУ переносится к первому вражескому острову.
+--   3. A / D (или стрелки ◀ ▶ сверху, между ними — ник владельца) листают острова.
+--   4. Клик по острову ставит маркер удара, кнопка «ЗАПУСК» внизу отправляет ракету.
+--   5. Выход — кнопка ✕ или клавиша Q.
 -- Сервер независимо проверяет дистанцию, права, остров и точку — клиенту не доверяем.
 local Players           = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local UserInputService  = game:GetService("UserInputService")
 local TweenService      = game:GetService("TweenService")
+local RunService        = game:GetService("RunService")
 local sharedFolder      = ReplicatedStorage:WaitForChild("Shared", 10)
 
 local Remotes           = require(sharedFolder:WaitForChild("Remotes"))
@@ -23,22 +24,25 @@ local mouse = player:GetMouse()
 local HudManager = {}
 
 local animEnabled = true
-local moneyLabel, rocketLabel, buyRocketBtn
-local launcherCount = Config.START_LAUNCHERS
 local rocketReady = Config.START_LAUNCHERS
 local notifFrame, notifLabel, notifThread
 
+-- Деньги (нижняя панель)
+local moneyText, moneyLogoScale
+local shownMoney = 0
+local moneyThread
+
 -- Состояние сценария прицеливания.
-local targetPanel, listView, aimView, listScroll
-local aimInfoLabel, aimStatusLabel, launchButton
+local topBar, ownerLabel, islandLabel, hintLabel, launchButton
 local targetingActive = false
-local aimingPlotId = nil
+local targets = {}      -- { {plotId, ownerUserId}, ... }
+local targetIndex = 0
 local aimPos = nil
 local aimMarker = nil
 
 -- Заморозка передвижения на время прицеливания (камера уходит к цели).
 local humFrozen = false
-local savedWalkSpeed, savedJumpPower, savedJumpHeight
+local savedJumpPower, savedJumpHeight
 
 -- Сохранённое состояние камеры для восстановления после прицеливания.
 local cameraFocused = false
@@ -173,7 +177,7 @@ local function focusCameraOnIsland(plotId)
 		cameraFocused = true
 	end
 	camera.CameraType = Enum.CameraType.Scriptable
-	local target = CFrame.lookAt(center + Vector3.new(0, 300, 120), center)
+	local target = CFrame.lookAt(center + Vector3.new(0, 340, 150), center)
 	TweenService:Create(camera, TweenInfo.new(0.45, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
 		CFrame = target,
 	}):Play()
@@ -196,7 +200,6 @@ local function setFrozen(on)
 	if not hum then return end
 	if on then
 		if not humFrozen then
-			savedWalkSpeed = hum.WalkSpeed
 			savedJumpPower = hum.JumpPower
 			savedJumpHeight = hum.JumpHeight
 			humFrozen = true
@@ -205,7 +208,9 @@ local function setFrozen(on)
 		hum.JumpPower = 0
 		hum.JumpHeight = 0
 	elseif humFrozen then
-		hum.WalkSpeed = savedWalkSpeed or 16
+		-- Возвращаем скорость с учётом спринта (Shift может быть зажат прямо сейчас).
+		local sprinting = UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) or UserInputService:IsKeyDown(Enum.KeyCode.RightShift)
+		hum.WalkSpeed = sprinting and Config.SPRINT_SPEED or Config.WALK_SPEED
 		hum.JumpPower = savedJumpPower or 0
 		hum.JumpHeight = savedJumpHeight or 7.2
 		humFrozen = false
@@ -217,29 +222,25 @@ local function setLaunchEnabled(enabled)
 	if not launchButton then return end
 	launchButton.Active = enabled
 	launchButton.AutoButtonColor = enabled
-	launchButton.BackgroundColor3 = enabled and Color3.fromRGB(205, 67, 55) or Color3.fromRGB(73, 82, 86)
+	launchButton.BackgroundColor3 = enabled and Color3.fromRGB(205, 67, 55) or Color3.fromRGB(60, 66, 74)
+	launchButton.TextColor3 = enabled and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(150, 158, 166)
 end
 
--- Полное закрытие сценария: панель, маркер, камера, заморозка.
+-- Полное закрытие сценария: панели, маркер, камера, заморозка.
 function HudManager.CloseTargeting()
 	targetingActive = false
-	aimingPlotId = nil
+	targetIndex = 0
 	aimPos = nil
 	clearMarker()
 	restoreCamera()
 	setFrozen(false)
-	if targetPanel then targetPanel.Visible = false end
+	if topBar then topBar.Visible = false end
+	if hintLabel then hintLabel.Visible = false end
+	if launchButton then launchButton.Visible = false end
 end
 
--- Список допустимых островов-целей (все, кроме своего). Владелец либо "свободно".
-local function refreshIslandList()
-	if not listScroll then return end
-	for _, child in ipairs(listScroll:GetChildren()) do
-		if child:IsA("Frame") or child:IsA("TextButton") or child:IsA("TextLabel") then
-			child:Destroy()
-		end
-	end
-
+-- Список допустимых островов-целей (все, кроме своего). Занятые — первыми.
+local function collectTargets()
 	local myId = player:GetAttribute("PlotId")
 	local entries = {}
 	for _, folder in ipairs(workspace:GetChildren()) do
@@ -248,96 +249,75 @@ local function refreshIslandList()
 			table.insert(entries, { plotId = pid, ownerUserId = folder:GetAttribute("OwnerUserId") or 0 })
 		end
 	end
-	-- Занятые острова (реальные враги) — вверху списка, затем по номеру.
 	table.sort(entries, function(a, b)
 		local ao, bo = a.ownerUserId ~= 0, b.ownerUserId ~= 0
 		if ao ~= bo then return ao end
 		return a.plotId < b.plotId
 	end)
-
-	for i, entry in ipairs(entries) do
-		local owned = entry.ownerUserId ~= 0
-		local ownerName
-		if owned then
-			local p = Players:GetPlayerByUserId(entry.ownerUserId)
-			ownerName = p and p.DisplayName or ("Игрок " .. entry.ownerUserId)
-		else
-			ownerName = "Свободный остров"
-		end
-
-		local card = makeFrame(listScroll, UDim2.new(1, -8, 0, 62), UDim2.new(), Color3.fromRGB(35, 42, 47), 0.08, "Island_" .. entry.plotId)
-		card.LayoutOrder = i
-		makeLabel(card, ownerName, UDim2.new(1, -16, 0, 22), UDim2.fromOffset(8, 5), owned and Color3.fromRGB(235, 239, 241) or Color3.fromRGB(150, 165, 170), 14, Enum.Font.GothamBold)
-		makeLabel(card, "Остров #" .. entry.plotId, UDim2.new(1, -90, 0, 18), UDim2.fromOffset(8, 30), Color3.fromRGB(170, 185, 190), 12)
-		local pick = makeButton(card, "Выбрать", UDim2.fromOffset(78, 26), UDim2.new(1, -86, 0, 28), owned and Color3.fromRGB(205, 67, 55) or Color3.fromRGB(90, 100, 108))
-		local plotId = entry.plotId
-		pick.MouseButton1Click:Connect(function()
-			HudManager.SelectIsland(plotId)
-		end)
-	end
-
-	if #entries == 0 then
-		makeLabel(listScroll, "Нет доступных островов", UDim2.new(1, -8, 0, 24), UDim2.new(), Color3.fromRGB(170, 185, 190), 13)
-	end
+	return entries
 end
 
--- Переход к выбору точки на выбранном острове.
-function HudManager.SelectIsland(plotId)
-	if not targetingActive then return end
-	aimingPlotId = plotId
-	aimPos = nil
-	clearMarker()
-	setLaunchEnabled(false)
-
-	local folder = workspace:FindFirstChild("Plot_" .. plotId)
+-- Верхняя плашка: ◀ [ник владельца острова] ▶
+local function updateHeader()
+	local entry = targets[targetIndex]
+	if not entry then return end
+	local folder = workspace:FindFirstChild("Plot_" .. entry.plotId)
 	local ownerUserId = folder and folder:GetAttribute("OwnerUserId") or 0
 	local ownerName = "Свободный остров"
 	if ownerUserId ~= 0 then
 		local p = Players:GetPlayerByUserId(ownerUserId)
 		ownerName = p and p.DisplayName or ("Игрок " .. ownerUserId)
 	end
-	if aimInfoLabel then aimInfoLabel.Text = string.format("Цель: Остров #%d\n%s", plotId, ownerName) end
-	if aimStatusLabel then
-		aimStatusLabel.Text = "Кликните по острову, чтобы\nвыбрать точку удара"
-		aimStatusLabel.TextColor3 = Color3.fromRGB(255, 214, 90)
+	if ownerLabel then
+		ownerLabel.Text = ownerName
+		ownerLabel.TextColor3 = ownerUserId ~= 0 and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(160, 175, 182)
 	end
-
-	if listView then listView.Visible = false end
-	if aimView then aimView.Visible = true end
-	focusCameraOnIsland(plotId)
+	if islandLabel then
+		islandLabel.Text = string.format("Остров #%d   •   %d / %d", entry.plotId, targetIndex, #targets)
+	end
 end
 
--- Возврат к списку целей (сброс точки и камеры).
-local function backToList()
-	aimingPlotId = nil
+-- Переключение на цель под номером index (с закольцовкой).
+local function selectTarget(index)
+	if #targets == 0 then return end
+	targetIndex = ((index - 1) % #targets) + 1
 	aimPos = nil
 	clearMarker()
-	restoreCamera()
 	setLaunchEnabled(false)
-	if aimView then aimView.Visible = false end
-	if listView then listView.Visible = true end
-	refreshIslandList()
+	if hintLabel then
+		hintLabel.Text = "Кликните по острову — точка удара   •   A / D — сменить остров   •   Q — выход"
+		hintLabel.TextColor3 = Color3.fromRGB(255, 214, 90)
+	end
+	updateHeader()
+	focusCameraOnIsland(targets[targetIndex].plotId)
 end
 
 -- Открыть сценарий (вызывается ProximityPrompt'ом рядом с установкой).
+-- Никаких списков: камера сразу уходит на первый вражеский остров.
 function HudManager.OpenTargeting()
 	if targetingActive then return end
 	if player:GetAttribute("PlotId") == nil then return end
+	targets = collectTargets()
+	if #targets == 0 then
+		HudManager.ShowNotification("Нет доступных целей", Color3.fromRGB(255, 180, 40))
+		return
+	end
 	targetingActive = true
-	aimingPlotId = nil
 	aimPos = nil
 	clearMarker()
 	setFrozen(true)
 	setLaunchEnabled(false)
-	if targetPanel then targetPanel.Visible = true end
-	if aimView then aimView.Visible = false end
-	if listView then listView.Visible = true end
-	refreshIslandList()
+	if topBar then topBar.Visible = true end
+	if hintLabel then hintLabel.Visible = true end
+	if launchButton then launchButton.Visible = true end
+	selectTarget(1)
 end
 
 -- Подтверждение запуска: вызываем серверную логику с правильными аргументами.
 local function doLaunch()
-	if not targetingActive or not aimingPlotId then return end
+	if not targetingActive or targetIndex == 0 then return end
+	local entry = targets[targetIndex]
+	if not entry then return end
 	if not aimPos then
 		HudManager.ShowNotification("Сначала выберите точку удара", Color3.fromRGB(255, 180, 40))
 		return
@@ -346,38 +326,39 @@ local function doLaunch()
 		HudManager.ShowNotification("Все ракеты перезаряжаются", Color3.fromRGB(239, 117, 91))
 		return
 	end
-	local plotId, pos = aimingPlotId, aimPos
+	local plotId, pos = entry.plotId, aimPos
 	-- Сначала закрываем UI/восстанавливаем камеру — затем сервер перехватит камеру
 	-- под облёт ракеты (RocketFollow), стартовав с обычной камеры игрока.
 	HudManager.CloseTargeting()
 	Remotes.Get("LaunchRocket"):FireServer(plotId, pos)
 end
 
--- Клик по 3D-миру в режиме выбора точки: ставим/переставляем маркер удара.
+-- Клик по 3D-миру в режиме прицела: ставим/переставляем маркер удара.
 local function onWorldClick(input, gpe)
 	if gpe then return end
-	if not targetingActive or not aimingPlotId then return end
-	if not (aimView and aimView.Visible) then return end
+	if not targetingActive or targetIndex == 0 then return end
 	if input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch then
 		return
 	end
+	local entry = targets[targetIndex]
+	if not entry then return end
 	local part = mouse.Target
 	if not part then return end
 	local plotId = findClickedPlot(part)
-	if plotId ~= aimingPlotId then
+	if plotId ~= entry.plotId then
 		HudManager.ShowNotification("Кликните по выбранному острову", Color3.fromRGB(255, 180, 40))
 		return
 	end
 	aimPos = mouse.Hit.Position
 	showMarker(aimPos)
 	setLaunchEnabled(true)
-	if aimStatusLabel then
-		aimStatusLabel.Text = "Точка удара выбрана.\nМожно запускать."
-		aimStatusLabel.TextColor3 = Color3.fromRGB(98, 220, 144)
+	if hintLabel then
+		hintLabel.Text = "Точка удара выбрана — жмите ЗАПУСК"
+		hintLabel.TextColor3 = Color3.fromRGB(98, 220, 144)
 	end
 end
 
--- Создаёт ProximityPrompt на КАЖДОЙ своей установке (видит только владелец).
+-- Создаёт ProximityPrompt на КАЖДОЙ своей установке.
 local function ensurePrompts()
 	local myId = player:GetAttribute("PlotId")
 	if myId == nil then return end
@@ -385,7 +366,7 @@ local function ensurePrompts()
 	local silo = plotFolder and plotFolder:FindFirstChild("RocketSilo")
 	if not silo then return end
 	for _, launcher in ipairs(silo:GetChildren()) do
-		if launcher:IsA("Model") and not launcher:FindFirstChild("LaunchPrompt") then
+		if launcher:IsA("Model") and not launcher:FindFirstChild("LaunchPrompt", true) then
 			local pad = launcher.PrimaryPart or launcher:FindFirstChild("Pad")
 			if pad then
 				local prompt = Instance.new("ProximityPrompt")
@@ -414,6 +395,13 @@ local function targetingStillValid()
 	return silo ~= nil and #silo:GetChildren() > 0
 end
 
+-- Красивое число с разделением тысяч: 1234567 → "1 234 567".
+local function formatMoney(n)
+	local s = tostring(math.floor((n or 0) + 0.5))
+	local formatted = (s:reverse():gsub("(%d%d%d)", "%1 ")):reverse()
+	return (formatted:gsub("^%s+", ""))
+end
+
 function HudManager.Init(initAnimEnabled)
 	animEnabled = initAnimEnabled ~= false
 
@@ -423,91 +411,95 @@ function HudManager.Init(initAnimEnabled)
 	screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Global
 	screenGui.Parent = playerGui
 
-	notifFrame = makeFrame(screenGui, UDim2.new(0, 360, 0, 50), UDim2.new(0.5, -180, 0, 10), Color3.fromRGB(20, 20, 25), 0.1, "NotifFrame")
+	-- Уведомления (верх, по центру)
+	notifFrame = makeFrame(screenGui, UDim2.new(0, 360, 0, 50), UDim2.new(0.5, -180, 0, 96), Color3.fromRGB(20, 20, 25), 0.1, "NotifFrame")
 	notifFrame.ZIndex = 20
 	notifFrame.Visible = false
 
 	notifLabel = makeLabel(notifFrame, "", UDim2.new(1, -10, 1, 0), UDim2.new(0, 5, 0, 0), Color3.fromRGB(255, 255, 255), 14, Enum.Font.GothamBold)
 	notifLabel.TextXAlignment = Enum.TextXAlignment.Center
 
-	local resPanel = makeFrame(screenGui, UDim2.new(0, 230, 0, 105), UDim2.new(0, 12, 0, 12), Color3.fromRGB(20, 20, 30), 0.1, "ResPanel")
+	-- === Деньги: внизу, горизонтально по центру, слева круглый логотип бакса ===
+	local moneyBar = makeFrame(screenGui, UDim2.new(0, 230, 0, 56), UDim2.new(0.5, -115, 1, -72), Color3.fromRGB(14, 18, 24), 0.08, "MoneyBar")
+	moneyBar:FindFirstChildOfClass("UICorner").CornerRadius = UDim.new(0, 28)
+	local moneyStroke = Instance.new("UIStroke")
+	moneyStroke.Color = Color3.fromRGB(255, 214, 90)
+	moneyStroke.Transparency = 0.72
+	moneyStroke.Thickness = 1.4
+	moneyStroke.Parent = moneyBar
 
-	makeLabel(resPanel, "ROCKET ISLANDS", UDim2.new(1, -10, 0, 24), UDim2.new(0, 8, 0, 4), Color3.fromRGB(92, 205, 188), 16, Enum.Font.GothamBold)
+	local logo = Instance.new("Frame")
+	logo.Name = "DollarLogo"
+	logo.Size = UDim2.new(0, 40, 0, 40)
+	logo.Position = UDim2.new(0, 8, 0.5, -20)
+	logo.BackgroundColor3 = Color3.fromRGB(52, 206, 118)
+	logo.BorderSizePixel = 0
+	logo.Parent = moneyBar
+	local logoCorner = Instance.new("UICorner")
+	logoCorner.CornerRadius = UDim.new(1, 0)
+	logoCorner.Parent = logo
+	moneyLogoScale = Instance.new("UIScale")
+	moneyLogoScale.Parent = logo
 
-	moneyLabel = makeLabel(resPanel, "Деньги  $0", UDim2.new(1, -10, 0, 22), UDim2.new(0, 8, 0, 32), Color3.fromRGB(255, 214, 90), 15)
-	rocketLabel = makeLabel(resPanel, "Готово  1 / 1", UDim2.new(1, -10, 0, 22), UDim2.new(0, 8, 0, 56), Color3.fromRGB(98, 220, 144), 15)
+	local dollar = makeLabel(logo, "$", UDim2.new(1, 0, 1, 0), UDim2.new(), Color3.fromRGB(255, 255, 255), 24, Enum.Font.GothamBlack)
+	dollar.TextXAlignment = Enum.TextXAlignment.Center
 
-	local actPanel = makeFrame(screenGui, UDim2.new(0, 230, 0, 96), UDim2.new(0, 12, 0, 125), Color3.fromRGB(20, 20, 30), 0.1, "ActPanel")
+	moneyText = makeLabel(moneyBar, "0", UDim2.new(1, -66, 1, 0), UDim2.new(0, 58, 0, 0), Color3.fromRGB(255, 227, 125), 22, Enum.Font.GothamBold)
+	moneyText.TextXAlignment = Enum.TextXAlignment.Left
+	moneyText.TextYAlignment = Enum.TextYAlignment.Center
 
-	buyRocketBtn = makeButton(actPanel, "Установка 2  $" .. Config.LAUNCHER_COSTS[2], UDim2.new(1, -16, 0, 38), UDim2.new(0, 8, 0, 8), Color3.fromRGB(33, 133, 151))
-	buyRocketBtn.MouseButton1Click:Connect(function()
-		Remotes.Get("BuyLauncher"):FireServer()
-	end)
+	-- === Верхняя плашка прицеливания: ◀ [ник] ▶ и ✕ ===
+	topBar = makeFrame(screenGui, UDim2.new(0, 460, 0, 68), UDim2.new(0.5, -230, 0, 14), Color3.fromRGB(14, 18, 24), 0.12, "TargetBar")
+	topBar:FindFirstChildOfClass("UICorner").CornerRadius = UDim.new(0, 16)
+	topBar.Visible = false
 
-	makeLabel(actPanel, "Подойди к ракете и держи E,\nчтобы нанести удар", UDim2.new(1, -16, 0, 34), UDim2.new(0, 8, 0, 54), Color3.fromRGB(170, 185, 190), 12).TextYAlignment = Enum.TextYAlignment.Top
+	local prevBtn = makeButton(topBar, "◀", UDim2.new(0, 52, 1, -16), UDim2.new(0, 8, 0, 8), Color3.fromRGB(36, 44, 52))
+	prevBtn.TextSize = 22
+	local nextBtn = makeButton(topBar, "▶", UDim2.new(0, 52, 1, -16), UDim2.new(1, -60, 0, 8), Color3.fromRGB(36, 44, 52))
+	nextBtn.TextSize = 22
 
-	-- Панель ракетного удара (список целей + выбор точки). Скрыта по умолчанию.
-	targetPanel = makeFrame(screenGui, UDim2.new(0, 270, 0, 420), UDim2.new(1, -282, 0, 12), Color3.fromRGB(20, 20, 30), 0.08, "TargetPanel")
-	targetPanel.Visible = false
+	ownerLabel = makeLabel(topBar, "—", UDim2.new(1, -140, 0, 30), UDim2.new(0, 70, 0, 8), Color3.fromRGB(255, 255, 255), 20, Enum.Font.GothamBold)
+	ownerLabel.TextXAlignment = Enum.TextXAlignment.Center
+	islandLabel = makeLabel(topBar, "", UDim2.new(1, -140, 0, 20), UDim2.new(0, 70, 0, 40), Color3.fromRGB(160, 175, 182), 13)
+	islandLabel.TextXAlignment = Enum.TextXAlignment.Center
 
-	makeLabel(targetPanel, "РАКЕТНЫЙ УДАР", UDim2.new(1, -46, 0, 26), UDim2.new(0, 10, 0, 6), Color3.fromRGB(236, 108, 91), 16, Enum.Font.GothamBold)
+	-- ✕ прижата к правому верхнему углу плашки (снаружи)
+	local closeBtn = makeButton(topBar, "✕", UDim2.new(0, 34, 0, 34), UDim2.new(1, 10, 0, 0), Color3.fromRGB(73, 82, 86))
 
-	local closeBtn = makeButton(targetPanel, "✕", UDim2.fromOffset(28, 24), UDim2.new(1, -34, 0, 6), Color3.fromRGB(73, 82, 86))
-	closeBtn.MouseButton1Click:Connect(function()
-		HudManager.CloseTargeting()
-	end)
+	prevBtn.MouseButton1Click:Connect(function() selectTarget(targetIndex - 1) end)
+	nextBtn.MouseButton1Click:Connect(function() selectTarget(targetIndex + 1) end)
+	closeBtn.MouseButton1Click:Connect(function() HudManager.CloseTargeting() end)
 
-	-- --- Вид со списком островов ---
-	listView = Instance.new("Frame")
-	listView.Name = "ListView"
-	listView.BackgroundTransparency = 1
-	listView.Size = UDim2.new(1, 0, 1, -40)
-	listView.Position = UDim2.new(0, 0, 0, 38)
-	listView.Parent = targetPanel
+	-- Подсказка под плашкой
+	hintLabel = makeLabel(screenGui, "", UDim2.new(0, 680, 0, 22), UDim2.new(0.5, -340, 0, 88), Color3.fromRGB(255, 214, 90), 14)
+	hintLabel.TextXAlignment = Enum.TextXAlignment.Center
+	hintLabel.Visible = false
 
-	makeLabel(listView, "Выберите остров-цель:", UDim2.new(1, -16, 0, 20), UDim2.new(0, 10, 0, 2), Color3.fromRGB(200, 210, 214), 13)
-
-	listScroll = Instance.new("ScrollingFrame")
-	listScroll.Size = UDim2.new(1, -10, 1, -28)
-	listScroll.Position = UDim2.new(0, 5, 0, 26)
-	listScroll.BackgroundTransparency = 1
-	listScroll.BorderSizePixel = 0
-	listScroll.ScrollBarThickness = 5
-	listScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
-	listScroll.CanvasSize = UDim2.new()
-	listScroll.Parent = listView
-
-	local layout = Instance.new("UIListLayout")
-	layout.SortOrder = Enum.SortOrder.LayoutOrder
-	layout.Padding = UDim.new(0, 8)
-	layout.Parent = listScroll
-
-	-- --- Вид выбора точки удара ---
-	aimView = Instance.new("Frame")
-	aimView.Name = "AimView"
-	aimView.BackgroundTransparency = 1
-	aimView.Size = UDim2.new(1, 0, 1, -40)
-	aimView.Position = UDim2.new(0, 0, 0, 38)
-	aimView.Visible = false
-	aimView.Parent = targetPanel
-
-	aimInfoLabel = makeLabel(aimView, "Цель: —", UDim2.new(1, -20, 0, 40), UDim2.new(0, 10, 0, 4), Color3.fromRGB(235, 239, 241), 15, Enum.Font.GothamBold)
-	aimInfoLabel.TextYAlignment = Enum.TextYAlignment.Top
-
-	aimStatusLabel = makeLabel(aimView, "Кликните по острову, чтобы\nвыбрать точку удара", UDim2.new(1, -20, 0, 44), UDim2.new(0, 10, 0, 52), Color3.fromRGB(255, 214, 90), 13)
-	aimStatusLabel.TextYAlignment = Enum.TextYAlignment.Top
-
-	launchButton = makeButton(aimView, "🚀 ЗАПУСК", UDim2.new(1, -20, 0, 46), UDim2.new(0, 10, 1, -108), Color3.fromRGB(73, 82, 86))
-	launchButton.TextSize = 18
+	-- Большая кнопка запуска (над денежной панелью)
+	launchButton = makeButton(screenGui, "🚀  ЗАПУСК", UDim2.new(0, 260, 0, 58), UDim2.new(0.5, -130, 1, -148), Color3.fromRGB(60, 66, 74))
+	launchButton:FindFirstChildOfClass("UICorner").CornerRadius = UDim.new(0, 29)
+	launchButton.TextSize = 20
+	launchButton.Visible = false
 	launchButton.Active = false
 	launchButton.AutoButtonColor = false
 	launchButton.MouseButton1Click:Connect(doLaunch)
 
-	local backButton = makeButton(aimView, "← К списку целей", UDim2.new(1, -20, 0, 40), UDim2.new(0, 10, 1, -54), Color3.fromRGB(50, 60, 68))
-	backButton.MouseButton1Click:Connect(backToList)
-
-	-- Клик по 3D-миру ставит точку удара в режиме прицела.
-	UserInputService.InputBegan:Connect(onWorldClick)
+	-- Ввод: клики мыши ставят точку удара; A/D/стрелки листают острова; Q — выход.
+	UserInputService.InputBegan:Connect(function(input, gpe)
+		if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+			onWorldClick(input, gpe)
+			return
+		end
+		if gpe then return end
+		if not targetingActive then return end
+		if input.KeyCode == Enum.KeyCode.A or input.KeyCode == Enum.KeyCode.Left then
+			selectTarget(targetIndex - 1)
+		elseif input.KeyCode == Enum.KeyCode.D or input.KeyCode == Enum.KeyCode.Right then
+			selectTarget(targetIndex + 1)
+		elseif input.KeyCode == Enum.KeyCode.Q or input.KeyCode == Enum.KeyCode.Escape then
+			HudManager.CloseTargeting()
+		end
+	end)
 
 	-- Смерть/респавн: сбрасываем прицел и любые изменения ввода/камеры.
 	local function bindCharacter(char)
@@ -524,12 +516,25 @@ function HudManager.Init(initAnimEnabled)
 	-- В отдельном потоке: bindCharacter может ждать Humanoid и не должен блокировать старт.
 	if player.Character then task.spawn(bindCharacter, player.Character) end
 
-	-- Обновляем список целей при входе/выходе игроков, пока открыт список.
+	-- Обновляем цели при входе/выходе игроков, пока прицел открыт (текущий остров сохраняем).
 	local function maybeRefresh()
-		if targetingActive and listView and listView.Visible then
-			task.wait(0.4)
-			refreshIslandList()
+		task.wait(0.4)
+		if not targetingActive then return end
+		local currentPlotId = targets[targetIndex] and targets[targetIndex].plotId
+		targets = collectTargets()
+		if #targets == 0 then
+			HudManager.CloseTargeting()
+			return
 		end
+		local newIndex = 1
+		for i, entry in ipairs(targets) do
+			if entry.plotId == currentPlotId then
+				newIndex = i
+				break
+			end
+		end
+		targetIndex = newIndex
+		updateHeader()
 	end
 	Players.PlayerAdded:Connect(maybeRefresh)
 	Players.PlayerRemoving:Connect(maybeRefresh)
@@ -548,29 +553,32 @@ function HudManager.Init(initAnimEnabled)
 end
 
 function HudManager.UpdateData(data)
-	if moneyLabel then moneyLabel.Text = "Деньги  $" .. (data.money or 0) end
-	launcherCount = data.launchers or launcherCount
-	if buyRocketBtn then
-		if launcherCount >= Config.MAX_LAUNCHERS then
-			buyRocketBtn.Text = "Все установки построены"
-			buyRocketBtn.Active = false
-			buyRocketBtn.BackgroundColor3 = Color3.fromRGB(73, 82, 86)
-		else
-			local nextCount = launcherCount + 1
-			buyRocketBtn.Text = string.format("Установка %d  $%d", nextCount, Config.LAUNCHER_COSTS[nextCount])
-			buyRocketBtn.Active = true
-			buyRocketBtn.BackgroundColor3 = Color3.fromRGB(33, 133, 151)
-		end
+	local target = data.money or 0
+	if not moneyText then return end
+
+	-- Плавный "отсчёт" суммы + пульс логотипа при изменении.
+	if moneyThread then task.cancel(moneyThread) end
+	local from = shownMoney
+	if from ~= target and moneyLogoScale then
+		local pop = TweenService:Create(moneyLogoScale, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out, 0, true), { Scale = 1.18 })
+		pop:Play()
 	end
+	moneyThread = task.spawn(function()
+		local t0 = os.clock()
+		local duration = 0.4
+		while true do
+			local a = math.min((os.clock() - t0) / duration, 1)
+			local v = math.floor(from + (target - from) * a + 0.5)
+			shownMoney = v
+			moneyText.Text = formatMoney(v)
+			if a >= 1 then break end
+			RunService.RenderStepped:Wait()
+		end
+	end)
 end
 
 function HudManager.UpdateRocketState(data)
-	launcherCount = data.launchers or launcherCount
 	rocketReady = data.ready or 0
-	if rocketLabel then
-		rocketLabel.Text = string.format("Готово  %d / %d", rocketReady, launcherCount)
-		rocketLabel.TextColor3 = rocketReady > 0 and Color3.fromRGB(98, 220, 144) or Color3.fromRGB(239, 117, 91)
-	end
 end
 
 function HudManager.IsAnimEnabled()
