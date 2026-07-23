@@ -1,11 +1,11 @@
 # bake_export.py — готовит пиццерию к импорту в игру:
-#   1) строит сцену из pizza_shop.py
+#   1) строит сцену из pizza_shop.py (уровень чистоты — env PIZZA_LEVEL, 1..5)
 #   2) объединяет здание в ОДИН меш, центрирует в origin (низ на z=0)
 #   3) UV-развёртка + запекание всех процедурных материалов в атлас 2048px
 #   4) экспорт OBJ + MTL + PNG (можно сразу тащить в Roblox Studio → Import 3D)
-#   5) контрольный рендер запечённой модели
+#   5) (опционально, env BAKE_CHECK=1) контрольный рендер запечённой модели
 #
-# Запуск: blender -b --factory-startup -P bake_export.py
+# Запуск: PIZZA_LEVEL=3 blender -b --factory-startup -P bake_export.py
 import bpy
 import os
 from math import radians
@@ -15,6 +15,7 @@ EXPORT_DIR = "/agent/workspace/export"
 os.makedirs(EXPORT_DIR, exist_ok=True)
 
 exec(open("/agent/workspace/pizza_shop.py", encoding="utf-8").read())
+LVL = LEVEL  # выставлен внутри pizza_shop.py из PIZZA_LEVEL
 
 # --- Убираем окружение (земля/тротуар в игру не едут) ---
 for name in ("Ground", "Sidewalk"):
@@ -55,7 +56,7 @@ bpy.ops.uv.smart_project(angle_limit=radians(66), island_margin=0.003)
 bpy.ops.object.mode_set(mode='OBJECT')
 
 # --- Запекание цвета всех процедурных материалов в атлас ---
-img = bpy.data.images.new("PizzaShopAtlas", 2048, 2048)
+img = bpy.data.images.new("PizzaShopAtlas_lvl%d" % LVL, 2048, 2048)
 for mat in shop.data.materials:
     nodes = mat.node_tree.nodes
     tex = nodes.new("ShaderNodeTexImage")
@@ -71,14 +72,14 @@ shop.select_set(True)
 bpy.context.view_layer.objects.active = shop
 bpy.ops.object.bake(type='DIFFUSE', pass_filter={'COLOR'}, margin=4)
 
-tex_path = os.path.join(EXPORT_DIR, "pizza_shop_texture.png")
+tex_path = os.path.join(EXPORT_DIR, "pizza_shop_lvl%d_texture.png" % LVL)
 img.filepath_raw = tex_path
 img.file_format = 'PNG'
 img.save()
 print("BAKED:", tex_path)
 
 # --- Один финальный материал с запечённой текстурой ---
-baked = bpy.data.materials.new("PizzaShopBaked")
+baked = bpy.data.materials.new("PizzaShopBaked_lvl%d" % LVL)
 baked.use_nodes = True
 bnodes = baked.node_tree.nodes
 blinks = baked.node_tree.links
@@ -91,7 +92,7 @@ shop.data.materials.clear()
 shop.data.materials.append(baked)
 
 # --- Экспорт OBJ (+MTL, текстура копируется рядом) ---
-obj_path = os.path.join(EXPORT_DIR, "pizza_shop.obj")
+obj_path = os.path.join(EXPORT_DIR, "pizza_shop_lvl%d.obj" % LVL)
 bpy.ops.wm.obj_export(
     filepath=obj_path,
     export_selected_objects=True,
@@ -99,6 +100,10 @@ bpy.ops.wm.obj_export(
     path_mode='COPY',
 )
 print("EXPORTED:", obj_path)
+
+if os.environ.get("BAKE_CHECK", "0") != "1":
+    print("BAKE EXPORT DONE")
+    raise SystemExit(0)
 
 # --- Контрольный рендер запечённой модели (чистая сцена + импорт OBJ) ---
 bpy.ops.wm.read_factory_settings(use_empty=True)
