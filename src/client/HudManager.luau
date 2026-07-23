@@ -578,20 +578,21 @@ function HudManager.Init(initAnimEnabled)
 	moneyText.TextYAlignment = Enum.TextYAlignment.Center
 
 	-- === Кнопка ATTACK (слева, вертикально по центру) ===
-	attackBtn = makeButton(screenGui, "", UDim2.new(0, 68, 0, 68), UDim2.new(0, 12, 0.5, -34), Color3.fromRGB(178, 52, 44))
-	attackBtn:FindFirstChildOfClass("UICorner").CornerRadius = UDim.new(0, 18)
+	-- Нейтральный тёмный стиль (не выедающий красный), чуть крупнее.
+	attackBtn = makeButton(screenGui, "", UDim2.new(0, 84, 0, 84), UDim2.new(0, 12, 0.5, -42), Color3.fromRGB(28, 36, 46))
+	attackBtn:FindFirstChildOfClass("UICorner").CornerRadius = UDim.new(0, 20)
 	local attackStroke = Instance.new("UIStroke")
-	attackStroke.Color = Color3.fromRGB(255, 120, 100)
-	attackStroke.Transparency = 0.55
+	attackStroke.Color = Color3.fromRGB(120, 150, 184)
+	attackStroke.Transparency = 0.5
 	attackStroke.Thickness = 1.4
 	attackStroke.Parent = attackBtn
-	local attackIcon = makeLabel(attackBtn, "🚀", UDim2.new(1, 0, 0, 34), UDim2.new(0, 0, 0, 6), Color3.fromRGB(255, 255, 255), 24)
+	local attackIcon = makeLabel(attackBtn, "🚀", UDim2.new(1, 0, 0, 40), UDim2.new(0, 0, 0, 10), Color3.fromRGB(255, 255, 255), 28)
 	attackIcon.TextXAlignment = Enum.TextXAlignment.Center
-	local attackText = makeLabel(attackBtn, "ATTACK", UDim2.new(1, 0, 0, 16), UDim2.new(0, 0, 0, 42), Color3.fromRGB(255, 230, 225), 12, Enum.Font.GothamBlack)
+	local attackText = makeLabel(attackBtn, "ATTACK", UDim2.new(1, 0, 0, 18), UDim2.new(0, 0, 0, 52), Color3.fromRGB(198, 212, 226), 13, Enum.Font.GothamBlack)
 	attackText.TextXAlignment = Enum.TextXAlignment.Center
 
 	-- Панель Attack: «Ракета N — ОТПРАВИТЬ», стрелять можно без подхода к стендам.
-	attackPanel = makeCanvasPanel(screenGui, UDim2.new(0, 252, 0, 150), UDim2.new(0, 88, 0.5, 0), "AttackPanel")
+	attackPanel = makeCanvasPanel(screenGui, UDim2.new(0, 252, 0, 150), UDim2.new(0, 104, 0.5, 0), "AttackPanel")
 	attackPanel.AnchorPoint = Vector2.new(0, 0.5)
 	local attackTitle = makeLabel(attackPanel, "РАКЕТНЫЙ УДАР", UDim2.new(1, -20, 0, 26), UDim2.new(0, 12, 0, 6), Color3.fromRGB(236, 108, 91), 14, Enum.Font.GothamBold)
 	attackTitle.TextXAlignment = Enum.TextXAlignment.Left
