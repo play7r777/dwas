@@ -92,7 +92,7 @@ local function buildTerritory(plotId, slotIndex)
 	top.Size = Vector3.new(7, Config.SLOT_PLATFORM_SIZE, Config.SLOT_PLATFORM_SIZE)
 	top.Orientation = Vector3.new(0, 0, 90)
 	top.Position = center + Vector3.new(0, 6, 0)
-	top.Color = Color3.fromRGB(235, 211, 149)
+	top.Color = Color3.fromRGB(240, 202, 116) -- тёплый золотистый песок
 	top.Material = Enum.Material.Sand
 	top.Parent = territoryFolder
 

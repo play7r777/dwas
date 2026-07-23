@@ -287,7 +287,8 @@ local function buildIslandModel(plotId, position)
 	local themeColor = PLOT_THEME_COLORS[plotId] or Color3.fromRGB(150, 150, 150)
 
 	-- Единые сплошные цилиндры вместо перекрывающихся сегментов (устраняет z-fighting песка).
-	buildIslandBase(folder, position, Color3.fromRGB(235, 211, 149))
+	-- Тёплый золотистый песок вместо белёсого.
+	buildIslandBase(folder, position, Color3.fromRGB(240, 202, 116))
 	buildIslandDecor(folder, position, plotId)
 	buildReturnRamp(folder, position)
 
