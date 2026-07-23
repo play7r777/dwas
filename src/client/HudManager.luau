@@ -1,15 +1,16 @@
--- HudManager.luau — деньги (внизу по центру), настройки (⚙ справа снизу)
--- и сценарий ракетного удара. НИКАКИХ текстовых плашек по центру экрана:
--- ошибки показываются красной вспышкой денежного счётчика, подсказки прицела —
--- одной строкой под верхней плашкой во время прицеливания.
+-- HudManager.luau — деньги (внизу по центру), кнопка Attack (слева по центру),
+-- настройки (⚙ справа снизу) и сценарий ракетного удара. НИКАКИХ текстовых плашек
+-- по центру экрана: ошибки — красная вспышка денежного счётчика, подсказки прицела —
+-- одна строка под верхней плашкой во время прицеливания.
 --
--- Сценарий запуска (без бокового меню):
---   1. Игрок подходит к своей установке и удерживает E (ProximityPrompt).
---   2. Камера СРАЗУ переносится к первому вражескому острову.
---   3. A / D (или стрелки ◀ ▶ сверху, между ними — ник владельца) листают острова.
---   4. Клик по острову ставит маркер удара, кнопка «ЗАПУСК» внизу отправляет ракету.
---   5. Выход — кнопка ✕ или клавиша Q.
--- Сервер независимо проверяет дистанцию, права, остров и точку — клиенту не доверяем.
+-- Два пути запуска:
+--   А) Подойти к своему стенду и зажать E (быстрое удержание) — стреляет ИМЕННО
+--      этот стенд.
+--   Б) Кнопка ATTACK слева: открывается список ракет («Ракета N — ОТПРАВИТЬ»),
+--      можно стрелять откуда угодно, без подхода к стендам.
+-- Дальше одинаково: камера сразу у вражеского острова, A/D или ◀ ▶ листают цели
+-- (между стрелками — ник владельца), клик ставит маркер, ЗАПУСК отправляет.
+-- Сервер независимо проверяет права, остров и точку — клиенту не доверяем.
 local Players           = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local UserInputService  = game:GetService("UserInputService")
@@ -28,6 +29,9 @@ local HudManager = {}
 
 local animEnabled = true
 local rocketReady = Config.START_LAUNCHERS
+local launcherCount = Config.START_LAUNCHERS
+local rocketLevels = {}
+local reloadEndsAt = {} -- [index] = os.clock() + секунд до готовности
 
 -- Деньги (нижняя панель)
 local moneyText, moneyStroke, moneyLogoScale
@@ -35,8 +39,12 @@ local shownMoney = 0
 local moneyThread, moneyPopTween
 local flashToken = 0
 
--- Настройки (шестерёнка)
-local settingsPanel, animToggleBtn
+-- Настройки (шестерёнка) и Attack-меню
+local gearBtn, settingsPanel, animToggleBtn
+local settingsOpen = false
+local attackBtn, attackPanel
+local attackOpen = false
+local rowButtons = {}
 
 -- Состояние сценария прицеливания.
 local topBar, ownerLabel, islandLabel, hintLabel, launchButton
@@ -45,6 +53,7 @@ local targets = {}      -- { {plotId, ownerUserId}, ... }
 local targetIndex = 0
 local aimPos = nil
 local aimMarker = nil
+local pendingLauncherIndex = nil -- какой стенд стреляет (E у стенда / выбор в Attack)
 
 -- Заморозка передвижения на время прицеливания (камера уходит к цели).
 local humFrozen = false
@@ -70,6 +79,39 @@ local function makeFrame(parent, size, pos, color, alpha, name)
 	c.CornerRadius = UDim.new(0, 8)
 	c.Parent = f
 	return f
+end
+
+-- Панель с плавным появлением/исчезновением (CanvasGroup умеет фейдить всё разом).
+local function makeCanvasPanel(parent, size, pos, name)
+	local p = Instance.new("CanvasGroup")
+	p.Name = name or "Panel"
+	p.Size = size
+	p.Position = pos
+	p.BackgroundColor3 = Color3.fromRGB(14, 18, 24)
+	p.BackgroundTransparency = 0.06
+	p.BorderSizePixel = 0
+	p.GroupTransparency = 1
+	p.Visible = false
+	p.Parent = parent
+	local c = Instance.new("UICorner")
+	c.CornerRadius = UDim.new(0, 14)
+	c.Parent = p
+	return p
+end
+
+local function fadePanel(panel, open)
+	if not panel then return end
+	if open then
+		panel.Visible = true
+		panel.GroupTransparency = 1
+		TweenService:Create(panel, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { GroupTransparency = 0 }):Play()
+	else
+		local t = TweenService:Create(panel, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { GroupTransparency = 1 })
+		t.Completed:Once(function()
+			if panel.GroupTransparency >= 0.99 then panel.Visible = false end
+		end)
+		t:Play()
+	end
 end
 
 local function makeLabel(parent, text, size, pos, color, fontSize, font)
@@ -263,6 +305,7 @@ function HudManager.CloseTargeting()
 	targetingActive = false
 	targetIndex = 0
 	aimPos = nil
+	pendingLauncherIndex = nil
 	clearMarker()
 	restoreCamera()
 	setFrozen(false)
@@ -324,9 +367,9 @@ local function selectTarget(index)
 	focusCameraOnIsland(targets[targetIndex].plotId)
 end
 
--- Открыть сценарий (вызывается ProximityPrompt'ом рядом с установкой).
--- Никаких списков: камера сразу уходит на первый вражеский остров.
-function HudManager.OpenTargeting()
+-- Открыть сценарий. launcherIndex — какой стенд стреляет: с ProximityPrompt (E у
+-- конкретного стенда) или из меню Attack. Камера сразу уходит на вражеский остров.
+function HudManager.OpenTargeting(launcherIndex)
 	if targetingActive then return end
 	if player:GetAttribute("PlotId") == nil then return end
 	targets = collectTargets()
@@ -336,9 +379,14 @@ function HudManager.OpenTargeting()
 	end
 	targetingActive = true
 	aimPos = nil
+	pendingLauncherIndex = launcherIndex
 	clearMarker()
 	setFrozen(true)
 	setLaunchEnabled(false)
+	if attackOpen then
+		attackOpen = false
+		fadePanel(attackPanel, false)
+	end
 	if topBar then topBar.Visible = true end
 	if hintLabel then hintLabel.Visible = true end
 	if launchButton then launchButton.Visible = true end
@@ -354,16 +402,16 @@ local function doLaunch()
 		setHint("Сначала выберите точку удара — кликните по острову", Color3.fromRGB(255, 180, 40))
 		return
 	end
-	if rocketReady <= 0 then
+	if pendingLauncherIndex == nil and rocketReady <= 0 then
 		setHint("Все ракеты перезаряжаются", Color3.fromRGB(255, 110, 95))
 		HudManager.FlashFeedback("error")
 		return
 	end
-	local plotId, pos = entry.plotId, aimPos
+	local plotId, pos, launcherIndex = entry.plotId, aimPos, pendingLauncherIndex
 	-- Сначала закрываем UI/восстанавливаем камеру — затем сервер перехватит камеру
 	-- под облёт ракеты (RocketFollow), стартовав с обычной камеры игрока.
 	HudManager.CloseTargeting()
-	Remotes.Get("LaunchRocket"):FireServer(plotId, pos)
+	Remotes.Get("LaunchRocket"):FireServer(plotId, pos, launcherIndex)
 end
 
 -- Клик по 3D-миру в режиме прицела: ставим/переставляем маркер удара.
@@ -388,7 +436,8 @@ local function onWorldClick(input, gpe)
 	setHint("Точка удара выбрана — жмите ЗАПУСК", Color3.fromRGB(98, 220, 144))
 end
 
--- Создаёт ProximityPrompt на КАЖДОЙ своей установке.
+-- Создаёт ProximityPrompt на КАЖДОЙ своей установке. Стреляет ИМЕННО тот стенд,
+-- у которого стоит игрок (передаём LauncherIndex). Удержание E короткое.
 local function ensurePrompts()
 	local myId = player:GetAttribute("PlotId")
 	if myId == nil then return end
@@ -403,13 +452,13 @@ local function ensurePrompts()
 				prompt.Name = "LaunchPrompt"
 				prompt.ActionText = "Запуск ракеты"
 				prompt.ObjectText = "Ракетная установка"
-				prompt.HoldDuration = 0.6
+				prompt.HoldDuration = 0.25
 				prompt.KeyboardKeyCode = Enum.KeyCode.E
 				prompt.RequiresLineOfSight = false
 				prompt.MaxActivationDistance = 16
 				prompt.Parent = pad
 				prompt.Triggered:Connect(function()
-					HudManager.OpenTargeting()
+					HudManager.OpenTargeting(launcher:GetAttribute("LauncherIndex"))
 				end)
 			end
 		end
@@ -432,6 +481,61 @@ local function formatMoney(n)
 	return (formatted:gsub("^%s+", ""))
 end
 
+-- === Attack-меню: список ракет с кнопками «ОТПРАВИТЬ» ===
+local function updateRowStates()
+	for i, rec in pairs(rowButtons) do
+		local ends = reloadEndsAt[i]
+		local ready = not (ends and ends > os.clock())
+		if ready then
+			rec.btn.Text = "ОТПРАВИТЬ"
+			rec.btn.BackgroundColor3 = Color3.fromRGB(205, 67, 55)
+			rec.btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+			rec.btn.AutoButtonColor = true
+		else
+			rec.btn.Text = string.format("%dс", math.max(1, math.ceil(ends - os.clock())))
+			rec.btn.BackgroundColor3 = Color3.fromRGB(60, 66, 74)
+			rec.btn.TextColor3 = Color3.fromRGB(160, 168, 176)
+			rec.btn.AutoButtonColor = false
+		end
+	end
+end
+
+local function rebuildAttackRows()
+	if not attackPanel then return end
+	for _, child in ipairs(attackPanel:GetChildren()) do
+		if child.Name == "RocketRow" then child:Destroy() end
+	end
+	rowButtons = {}
+	for i = 1, launcherCount do
+		local row = Instance.new("Frame")
+		row.Name = "RocketRow"
+		row.BackgroundColor3 = Color3.fromRGB(26, 33, 42)
+		row.BackgroundTransparency = 0.15
+		row.BorderSizePixel = 0
+		row.Size = UDim2.new(1, -16, 0, 46)
+		row.Position = UDim2.new(0, 8, 0, 38 + (i - 1) * 52)
+		row.Parent = attackPanel
+		local rc = Instance.new("UICorner")
+		rc.CornerRadius = UDim.new(0, 10)
+		rc.Parent = row
+
+		makeLabel(row, string.format("🚀 Ракета %d · ур.%d", i, rocketLevels[i] or 1), UDim2.new(1, -116, 1, 0), UDim2.new(0, 10, 0, 0), Color3.fromRGB(230, 236, 240), 14, Enum.Font.GothamBold)
+
+		local btn = makeButton(row, "ОТПРАВИТЬ", UDim2.new(0, 96, 0, 32), UDim2.new(1, -104, 0.5, -16), Color3.fromRGB(205, 67, 55))
+		btn.TextSize = 13
+		local index = i
+		btn.MouseButton1Click:Connect(function()
+			if targetingActive then return end
+			local ends = reloadEndsAt[index]
+			if ends and ends > os.clock() then return end
+			HudManager.OpenTargeting(index)
+		end)
+		rowButtons[i] = { btn = btn }
+	end
+	attackPanel.Size = UDim2.new(0, 252, 0, 38 + launcherCount * 52 + 8)
+	updateRowStates()
+end
+
 function HudManager.Init(initAnimEnabled)
 	animEnabled = initAnimEnabled ~= false
 
@@ -451,7 +555,7 @@ function HudManager.Init(initAnimEnabled)
 	moneyStroke.Parent = moneyBar
 
 	-- Якорь по центру: масштабирование «пульса» идёт от центра, логотип всегда
-	-- отцентрован по вертикали (раньше при прокачке он «уезжал» вниз).
+	-- отцентрован по вертикали.
 	local logo = Instance.new("Frame")
 	logo.Name = "DollarLogo"
 	logo.AnchorPoint = Vector2.new(0.5, 0.5)
@@ -473,14 +577,40 @@ function HudManager.Init(initAnimEnabled)
 	moneyText.TextXAlignment = Enum.TextXAlignment.Left
 	moneyText.TextYAlignment = Enum.TextYAlignment.Center
 
+	-- === Кнопка ATTACK (слева, вертикально по центру) ===
+	attackBtn = makeButton(screenGui, "", UDim2.new(0, 68, 0, 68), UDim2.new(0, 12, 0.5, -34), Color3.fromRGB(178, 52, 44))
+	attackBtn:FindFirstChildOfClass("UICorner").CornerRadius = UDim.new(0, 18)
+	local attackStroke = Instance.new("UIStroke")
+	attackStroke.Color = Color3.fromRGB(255, 120, 100)
+	attackStroke.Transparency = 0.55
+	attackStroke.Thickness = 1.4
+	attackStroke.Parent = attackBtn
+	local attackIcon = makeLabel(attackBtn, "🚀", UDim2.new(1, 0, 0, 34), UDim2.new(0, 0, 0, 6), Color3.fromRGB(255, 255, 255), 24)
+	attackIcon.TextXAlignment = Enum.TextXAlignment.Center
+	local attackText = makeLabel(attackBtn, "ATTACK", UDim2.new(1, 0, 0, 16), UDim2.new(0, 0, 0, 42), Color3.fromRGB(255, 230, 225), 12, Enum.Font.GothamBlack)
+	attackText.TextXAlignment = Enum.TextXAlignment.Center
+
+	-- Панель Attack: «Ракета N — ОТПРАВИТЬ», стрелять можно без подхода к стендам.
+	attackPanel = makeCanvasPanel(screenGui, UDim2.new(0, 252, 0, 150), UDim2.new(0, 88, 0.5, 0), "AttackPanel")
+	attackPanel.AnchorPoint = Vector2.new(0, 0.5)
+	local attackTitle = makeLabel(attackPanel, "РАКЕТНЫЙ УДАР", UDim2.new(1, -20, 0, 26), UDim2.new(0, 12, 0, 6), Color3.fromRGB(236, 108, 91), 14, Enum.Font.GothamBold)
+	attackTitle.TextXAlignment = Enum.TextXAlignment.Left
+
+	attackBtn.MouseButton1Click:Connect(function()
+		if targetingActive then return end
+		attackOpen = not attackOpen
+		if attackOpen then
+			rebuildAttackRows()
+		end
+		fadePanel(attackPanel, attackOpen)
+	end)
+
 	-- === Шестерёнка настроек (правый нижний угол) ===
-	local gearBtn = makeButton(screenGui, "⚙️", UDim2.new(0, 46, 0, 46), UDim2.new(1, -58, 1, -58), Color3.fromRGB(22, 28, 36))
+	gearBtn = makeButton(screenGui, "⚙️", UDim2.new(0, 46, 0, 46), UDim2.new(1, -58, 1, -58), Color3.fromRGB(22, 28, 36))
 	gearBtn:FindFirstChildOfClass("UICorner").CornerRadius = UDim.new(1, 0)
 	gearBtn.TextSize = 22
 
-	settingsPanel = makeFrame(screenGui, UDim2.new(0, 264, 0, 64), UDim2.new(1, -276, 1, -130), Color3.fromRGB(14, 18, 24), 0.06, "SettingsPanel")
-	settingsPanel:FindFirstChildOfClass("UICorner").CornerRadius = UDim.new(0, 14)
-	settingsPanel.Visible = false
+	settingsPanel = makeCanvasPanel(screenGui, UDim2.new(0, 264, 0, 64), UDim2.new(1, -276, 1, -130), "SettingsPanel")
 
 	makeLabel(settingsPanel, "Анимация полёта ракеты", UDim2.new(1, -102, 1, 0), UDim2.new(0, 14, 0, 0), Color3.fromRGB(218, 226, 232), 14)
 
@@ -491,8 +621,11 @@ function HudManager.Init(initAnimEnabled)
 	end
 	refreshToggle()
 
+	-- Клик по шестерёнке: анимация прокрутки + панель плавно проявляется/гаснет.
 	gearBtn.MouseButton1Click:Connect(function()
-		settingsPanel.Visible = not settingsPanel.Visible
+		settingsOpen = not settingsOpen
+		TweenService:Create(gearBtn, TweenInfo.new(0.4, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Rotation = gearBtn.Rotation + 180 }):Play()
+		fadePanel(settingsPanel, settingsOpen)
 	end)
 	animToggleBtn.MouseButton1Click:Connect(function()
 		animEnabled = not animEnabled
@@ -603,9 +736,24 @@ function HudManager.Init(initAnimEnabled)
 			task.wait(1)
 		end
 	end)
+
+	-- Тикающий отсчёт перезарядки в открытом Attack-меню.
+	task.spawn(function()
+		while true do
+			if attackPanel and attackPanel.Visible then
+				updateRowStates()
+			end
+			task.wait(0.4)
+		end
+	end)
 end
 
 function HudManager.UpdateData(data)
+	rocketLevels = data.rocketLevels or rocketLevels
+	if attackPanel and attackPanel.Visible then
+		rebuildAttackRows()
+	end
+
 	local target = data.money or 0
 	if not moneyText then return end
 
@@ -613,8 +761,7 @@ function HudManager.UpdateData(data)
 	if moneyThread then task.cancel(moneyThread) end
 	local from = shownMoney
 	if from ~= target and moneyLogoScale then
-		-- Гасим предыдущий пульс и сбрасываем масштаб: незавершённый твин
-		-- оставлял Scale > 1 и логотип «уезжал» из центра.
+		-- Гасим предыдущий пульс и сбрасываем масштаб (иначе логотип «уезжал»).
 		if moneyPopTween then moneyPopTween:Cancel() end
 		moneyLogoScale.Scale = 1
 		moneyPopTween = TweenService:Create(moneyLogoScale, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out, 0, true), { Scale = 1.15 })
@@ -636,6 +783,16 @@ end
 
 function HudManager.UpdateRocketState(data)
 	rocketReady = data.ready or 0
+	launcherCount = data.launchers or launcherCount
+	reloadEndsAt = {}
+	for index, seconds in pairs(data.reloads or {}) do
+		if type(index) == "number" and type(seconds) == "number" then
+			reloadEndsAt[index] = os.clock() + seconds
+		end
+	end
+	if attackPanel and attackPanel.Visible then
+		rebuildAttackRows()
+	end
 end
 
 function HudManager.IsAnimEnabled()

@@ -358,9 +358,6 @@ local function spawnBuilding(plotId, slotIndex, level)
 	local maxHp = maxHpForLevel(tier, level)
 	local folder, body, hpBar, statusLabel = buildBuildingModel(plotId, slotIndex, tier, level, territoryFolder)
 
-	-- Кнопка НЕ исчезает — она остаётся кнопкой прокачки этого здания.
-	updatePriceTag(plotId, slotIndex)
-
 	-- Активация кнопки СЛЕДУЮЩЕГО слота (последовательное открытие)
 	local nextSlot = slotIndex + 1
 	if plot and plot.slots[nextSlot] and not (plotFarms[plotId] and plotFarms[plotId][nextSlot]) then
@@ -381,6 +378,10 @@ local function spawnBuilding(plotId, slotIndex, level)
 		statusLabel = statusLabel,
 		rebuildTimer = 0,
 	}
+
+	-- ВАЖНО: ценник обновляем ПОСЛЕ записи нового уровня. Раньше он вызывался ДО
+	-- записи и показывал цену ПРОШЛОГО шага — «пишет $100, а списывается $160».
+	updatePriceTag(plotId, slotIndex)
 
 	Remotes.Get("BuildingStateChanged"):FireAllClients(plotId, slotIndex, {
 		tier = tier,
@@ -404,7 +405,12 @@ function FarmManager.BuyOrUpgrade(player, slotIndex)
 	if not data then
 		-- ПОКУПКА (уровень 1). Слот N доступен, только если построен слот N-1.
 		if slotIndex > 1 and not plotFarms[plotId][slotIndex - 1] then return end
-		if DataManager.GetMoney(player) < base.cost then return end
+		local money = DataManager.GetMoney(player)
+		if money < base.cost then
+			-- Красная вспышка счётчика на клиенте: денег не хватает.
+			Remotes.Get("Notify"):FireClient(player, string.format("Нужно ещё $%d", base.cost - money), "error")
+			return
+		end
 		DataManager.AddMoney(player, -base.cost)
 		spawnBuilding(plotId, slotIndex, 1)
 		print(string.format("[FarmManager] %s построил %s (ур.1)", player.Name, base.name))
@@ -414,7 +420,11 @@ function FarmManager.BuyOrUpgrade(player, slotIndex)
 		if data.level >= Config.MAX_BUILDING_LEVEL then return end
 		local nextLevel = data.level + 1
 		local cost = Config.UpgradeCost(slotIndex, nextLevel)
-		if DataManager.GetMoney(player) < cost then return end
+		local money = DataManager.GetMoney(player)
+		if money < cost then
+			Remotes.Get("Notify"):FireClient(player, string.format("Нужно ещё $%d", cost - money), "error")
+			return
+		end
 		DataManager.AddMoney(player, -cost)
 		spawnBuilding(plotId, slotIndex, nextLevel)
 		print(string.format("[FarmManager] %s прокачал %s до ур.%d", player.Name, base.name, nextLevel))

@@ -59,16 +59,8 @@ local function spawnExplosion(pos)
 	ringTween:Play()
 	Debris:AddItem(ring, 0.6)
 
-	-- Звук взрыва в точке удара.
-	local sound = Instance.new("Sound")
-	sound.SoundId = "rbxassetid://5801257793"
-	sound.Volume = 1
-	sound.RollOffMaxDistance = 400
-	sound.RollOffMinDistance = 20
-	sound.Parent = ball
-	sound:Play()
-
-	-- НАСТОЯЩИЙ чёрный дым: клубящиеся частицы вместо серых шаров-«кругов».
+	-- Холдер живёт дольше всех эффектов — на нём и дым, и звук (раньше звук был
+	-- приделан к шару-вспышке и ОБРЫВАЛСЯ через 0.5с вместе с ним).
 	local smokeHolder = Instance.new("Part")
 	smokeHolder.Size = Vector3.new(1, 1, 1)
 	smokeHolder.Position = pos + Vector3.new(0, 2, 0)
@@ -76,6 +68,30 @@ local function spawnExplosion(pos)
 	smokeHolder.CanCollide = false
 	smokeHolder.Transparency = 1
 	smokeHolder.Parent = workspace
+
+	-- Звук взрыва: плавный ВХОД (без резкого щелчка в начале), реверб-хвост и
+	-- плавный ВЫХОД — звучит мягче и не обрезается с двух концов.
+	local sound = Instance.new("Sound")
+	sound.SoundId = "rbxassetid://5801257793"
+	sound.Volume = 0
+	sound.PlaybackSpeed = 0.95
+	sound.RollOffMaxDistance = 400
+	sound.RollOffMinDistance = 20
+	sound.Parent = smokeHolder
+
+	local reverb = Instance.new("ReverbSoundEffect")
+	reverb.DecayTime = 1.5
+	reverb.Density = 0.8
+	reverb.WetLevel = -8
+	reverb.Parent = sound
+
+	sound:Play()
+	TweenService:Create(sound, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Volume = 0.85 }):Play()
+	task.delay(1.3, function()
+		if sound.Parent then
+			TweenService:Create(sound, TweenInfo.new(1.1, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { Volume = 0 }):Play()
+		end
+	end)
 
 	local smoke = Instance.new("ParticleEmitter")
 	smoke.Name = "ImpactSmoke"

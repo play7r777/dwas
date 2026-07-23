@@ -904,9 +904,6 @@ local function spawnBuilding(plotId, slotIndex, level)
 	local maxHp = maxHpForLevel(tier, level)
 	local folder, body, hpBar, statusLabel = buildBuildingModel(plotId, slotIndex, tier, level, territoryFolder)
 
-	-- Кнопка НЕ исчезает — она остаётся кнопкой прокачки этого здания.
-	updatePriceTag(plotId, slotIndex)
-
 	-- Активация кнопки СЛЕДУЮЩЕГО слота (последовательное открытие)
 	local nextSlot = slotIndex + 1
 	if plot and plot.slots[nextSlot] and not (plotFarms[plotId] and plotFarms[plotId][nextSlot]) then
@@ -927,6 +924,10 @@ local function spawnBuilding(plotId, slotIndex, level)
 		statusLabel = statusLabel,
 		rebuildTimer = 0,
 	}
+
+	-- ВАЖНО: ценник обновляем ПОСЛЕ записи нового уровня. Раньше он вызывался ДО
+	-- записи и показывал цену ПРОШЛОГО шага — «пишет $100, а списывается $160».
+	updatePriceTag(plotId, slotIndex)
 
 	Remotes.Get("BuildingStateChanged"):FireAllClients(plotId, slotIndex, {
 		tier = tier,
@@ -950,7 +951,12 @@ function FarmManager.BuyOrUpgrade(player, slotIndex)
 	if not data then
 		-- ПОКУПКА (уровень 1). Слот N доступен, только если построен слот N-1.
 		if slotIndex > 1 and not plotFarms[plotId][slotIndex - 1] then return end
-		if DataManager.GetMoney(player) < base.cost then return end
+		local money = DataManager.GetMoney(player)
+		if money < base.cost then
+			-- Красная вспышка счётчика на клиенте: денег не хватает.
+			Remotes.Get("Notify"):FireClient(player, string.format("Нужно ещё $%d", base.cost - money), "error")
+			return
+		end
 		DataManager.AddMoney(player, -base.cost)
 		spawnBuilding(plotId, slotIndex, 1)
 		print(string.format("[FarmManager] %s построил %s (ур.1)", player.Name, base.name))
@@ -960,7 +966,11 @@ function FarmManager.BuyOrUpgrade(player, slotIndex)
 		if data.level >= Config.MAX_BUILDING_LEVEL then return end
 		local nextLevel = data.level + 1
 		local cost = Config.UpgradeCost(slotIndex, nextLevel)
-		if DataManager.GetMoney(player) < cost then return end
+		local money = DataManager.GetMoney(player)
+		if money < cost then
+			Remotes.Get("Notify"):FireClient(player, string.format("Нужно ещё $%d", cost - money), "error")
+			return
+		end
 		DataManager.AddMoney(player, -cost)
 		spawnBuilding(plotId, slotIndex, nextLevel)
 		print(string.format("[FarmManager] %s прокачал %s до ур.%d", player.Name, base.name, nextLevel))
@@ -1615,16 +1625,17 @@ local function buildIslandModel(plotId, position)
 		billboard:SetAttribute("Unlocked", slotIdx == 1)
 		billboard.Parent = buyPad
 
+		-- Жирный читаемый шрифт (тонкий Medium выглядел «мерзко» на фоне мира).
 		local priceLabel = Instance.new("TextLabel")
 		priceLabel.Name = "PriceLabel"
 		priceLabel.Size = UDim2.new(1, 0, 1, 0)
 		priceLabel.BackgroundTransparency = 1
 		priceLabel.TextScaled = false
-		priceLabel.TextSize = 15
-		priceLabel.Font = Enum.Font.GothamMedium
-		priceLabel.TextColor3 = Color3.fromRGB(240, 244, 246)
+		priceLabel.TextSize = 16
+		priceLabel.Font = Enum.Font.GothamBold
+		priceLabel.TextColor3 = Color3.fromRGB(245, 248, 250)
 		priceLabel.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
-		priceLabel.TextStrokeTransparency = 0.5
+		priceLabel.TextStrokeTransparency = 0.35
 		local cfg = Config.FARM_TYPES[slotIdx]
 		priceLabel.Text = string.format("%s\n$%d", cfg.name, cfg.cost)
 		priceLabel.Parent = billboard
@@ -1672,11 +1683,11 @@ local function buildIslandModel(plotId, position)
 		label.Size = UDim2.new(1, 0, 1, 0)
 		label.BackgroundTransparency = 1
 		label.TextScaled = false
-		label.TextSize = 15
-		label.Font = Enum.Font.GothamMedium
-		label.TextColor3 = Color3.fromRGB(240, 244, 246)
+		label.TextSize = 16
+		label.Font = Enum.Font.GothamBold
+		label.TextColor3 = Color3.fromRGB(245, 248, 250)
 		label.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
-		label.TextStrokeTransparency = 0.5
+		label.TextStrokeTransparency = 0.35
 		label.Text = ""
 		label.Parent = billboard
 
@@ -2115,25 +2126,9 @@ local function notify(player, message, kind)
 	Remotes.Get("Notify"):FireClient(player, message, kind or "info")
 end
 
--- Авторитетная проверка близости: стрелок обязан стоять рядом с одной из СВОИХ
--- установок (не дальше Config.LAUNCH_MAX_DISTANCE по горизонтали). Клиент открывает
--- прицел только вблизи установки, но сервер не доверяет этому и проверяет сам.
-local function nearOwnLauncher(player)
-	local char = player.Character
-	local hrp = char and char:FindFirstChild("HumanoidRootPart")
-	if not hrp then return false end
-	local maxDist = Config.LAUNCH_MAX_DISTANCE
-	for index = 1, DataManager.GetLauncherCount(player) do
-		local origin = PlotManager.GetLauncherOrigin(player, index)
-		if origin then
-			local flat = Vector3.new(hrp.Position.X - origin.X, 0, hrp.Position.Z - origin.Z)
-			if flat.Magnitude <= maxDist then
-				return true
-			end
-		end
-	end
-	return false
-end
+-- Близость к установке больше НЕ требуется: ракету можно отправить и с кнопки
+-- Attack (удалённо). Если клиент передал номер стенда (стоял у него по E или
+-- выбрал в меню) — летит ИМЕННО этот стенд, а не первый готовый.
 
 -- Летящая ракета строится СЕРВЕРОМ (реплицируется всем) из ТОГО ЖЕ конструктора,
 -- что и стенд на базе (RocketFactory): то же поколение Mark, тот же цвет команды,
@@ -2180,6 +2175,26 @@ local function buildFlyingRocket(originPos, mark, teamColor)
 	light.Color = Color3.fromRGB(255, 150, 50)
 	light.Parent = root
 
+	-- Звук полёта: свист двигателя (луп, встроенный ассет Roblox — всегда доступен)
+	-- и «выстрел» на старте. Громкость лупа плавно гасится перед прилётом.
+	local whoosh = Instance.new("Sound")
+	whoosh.Name = "FlightLoop"
+	whoosh.SoundId = "rbxasset://sounds/Rocket whoosh 01.wav"
+	whoosh.Looped = true
+	whoosh.Volume = 0
+	whoosh.RollOffMinDistance = 15
+	whoosh.RollOffMaxDistance = 350
+	whoosh.Parent = root
+	whoosh:Play()
+
+	local shot = Instance.new("Sound")
+	shot.Name = "LaunchShot"
+	shot.SoundId = "rbxasset://sounds/Rocket shot.wav"
+	shot.Volume = 0.65
+	shot.RollOffMaxDistance = 300
+	shot.Parent = root
+	shot:Play()
+
 	return model
 end
 
@@ -2201,6 +2216,8 @@ local function flyRocket(shooter, originPos, targetPos, mark, teamColor, onImpac
 	end
 
 	task.spawn(function()
+		local root = model.PrimaryPart
+		local whoosh = root and root:FindFirstChild("FlightLoop")
 		local dist = (targetPos - originPos).Magnitude
 		local duration = math.clamp(dist / Config.ROCKET_SPEED, 0.9, Config.ROCKET_ANIM_TIME)
 		local elapsed = 0
@@ -2215,6 +2232,16 @@ local function flyRocket(shooter, originPos, targetPos, mark, teamColor, onImpac
 				model:PivotTo(CFrame.lookAt(pos, pos + dir))
 			else
 				model:PivotTo(CFrame.new(pos))
+			end
+			-- Плавная огибающая свиста: быстрый вход в начале, затухание к прилёту.
+			if whoosh then
+				if t < 0.12 then
+					whoosh.Volume = 0.55 * (t / 0.12)
+				elseif t > 0.85 then
+					whoosh.Volume = 0.55 * math.max(0, 1 - (t - 0.85) / 0.15)
+				else
+					whoosh.Volume = 0.55
+				end
 			end
 		end
 		model:Destroy()
@@ -2311,20 +2338,38 @@ local function onPadStep(player, index)
 	end
 end
 
-local function takeReadyLauncher(player)
+-- Пытается «застолбить» конкретный стенд: ставит его на перезарядку и возвращает true.
+local function tryTakeLauncher(player, index)
 	local now = workspace:GetServerTimeNow()
-	for index = 1, DataManager.GetLauncherCount(player) do
-		if (launcherReady[player] and launcherReady[player][index] or 0) <= now then
-			launcherReady[player][index] = now + Config.ROCKET_RELOAD
-			PlotManager.SetLauncherReady(player, index, false)
-			sendRocketState(player)
-			task.delay(Config.ROCKET_RELOAD, function()
-				if player.Parent and launcherReady[player] and launcherReady[player][index] then
-					launcherReady[player][index] = 0
-					PlotManager.SetLauncherReady(player, index, true)
-					sendRocketState(player)
-				end
-			end)
+	launcherReady[player] = launcherReady[player] or {}
+	if (launcherReady[player][index] or 0) <= now then
+		launcherReady[player][index] = now + Config.ROCKET_RELOAD
+		PlotManager.SetLauncherReady(player, index, false)
+		sendRocketState(player)
+		task.delay(Config.ROCKET_RELOAD, function()
+			if player.Parent and launcherReady[player] and launcherReady[player][index] then
+				launcherReady[player][index] = 0
+				PlotManager.SetLauncherReady(player, index, true)
+				sendRocketState(player)
+			end
+		end)
+		return true
+	end
+	return false
+end
+
+-- preferredIndex: стенд, у которого игрок стоял (E) или который выбрал в меню
+-- Attack — стреляет ИМЕННО он. Без preferredIndex берём первый готовый.
+local function takeReadyLauncher(player, preferredIndex)
+	local count = DataManager.GetLauncherCount(player)
+	if preferredIndex then
+		if preferredIndex >= 1 and preferredIndex <= count and tryTakeLauncher(player, preferredIndex) then
+			return preferredIndex
+		end
+		return nil
+	end
+	for index = 1, count do
+		if tryTakeLauncher(player, index) then
 			return index
 		end
 	end
@@ -2381,8 +2426,9 @@ function RocketManager.Init()
 		notify(player, string.format("Установка %d построена", result), "success")
 	end)
 
-	-- Клиент шлёт целевой остров и (опционально) точную точку прицела (raycast по 3D-миру).
-	launchEvent.OnServerEvent:Connect(function(player, targetPlotId, targetPos)
+	-- Клиент шлёт целевой остров, точку прицела (raycast по 3D-миру) и, опционально,
+	-- номер стенда (стоял у него по E / выбрал в меню Attack).
+	launchEvent.OnServerEvent:Connect(function(player, targetPlotId, targetPos, launcherIndexArg)
 		local now = os.clock()
 		if now - (lastRequest[player] or 0) < 0.2 then return end
 		lastRequest[player] = now
@@ -2396,15 +2442,14 @@ function RocketManager.Init()
 			return
 		end
 
-		-- Дистанция: стрелок должен стоять рядом со своей установкой.
-		if not nearOwnLauncher(player) then
-			notify(player, "Подойдите к своей ракетной установке", "error")
-			return
+		local preferredIndex = nil
+		if type(launcherIndexArg) == "number" and launcherIndexArg % 1 == 0 then
+			preferredIndex = launcherIndexArg
 		end
 
-		local launcherIndex = takeReadyLauncher(player)
+		local launcherIndex = takeReadyLauncher(player, preferredIndex)
 		if not launcherIndex then
-			notify(player, "Все ракеты перезаряжаются", "error")
+			notify(player, preferredIndex and "Эта ракета перезаряжается" or "Все ракеты перезаряжаются", "error")
 			return
 		end
 		local originPos = PlotManager.GetLauncherOrigin(player, launcherIndex)
@@ -2532,18 +2577,19 @@ print("[Client] Rocket Islands client connected")
         <Item class="ModuleScript" referent="21">
           <Properties>
             <string name="Name">HudManager</string>
-            <string name="Source"><![CDATA[-- HudManager.luau — деньги (внизу по центру), настройки (⚙ справа снизу)
--- и сценарий ракетного удара. НИКАКИХ текстовых плашек по центру экрана:
--- ошибки показываются красной вспышкой денежного счётчика, подсказки прицела —
--- одной строкой под верхней плашкой во время прицеливания.
+            <string name="Source"><![CDATA[-- HudManager.luau — деньги (внизу по центру), кнопка Attack (слева по центру),
+-- настройки (⚙ справа снизу) и сценарий ракетного удара. НИКАКИХ текстовых плашек
+-- по центру экрана: ошибки — красная вспышка денежного счётчика, подсказки прицела —
+-- одна строка под верхней плашкой во время прицеливания.
 --
--- Сценарий запуска (без бокового меню):
---   1. Игрок подходит к своей установке и удерживает E (ProximityPrompt).
---   2. Камера СРАЗУ переносится к первому вражескому острову.
---   3. A / D (или стрелки ◀ ▶ сверху, между ними — ник владельца) листают острова.
---   4. Клик по острову ставит маркер удара, кнопка «ЗАПУСК» внизу отправляет ракету.
---   5. Выход — кнопка ✕ или клавиша Q.
--- Сервер независимо проверяет дистанцию, права, остров и точку — клиенту не доверяем.
+-- Два пути запуска:
+--   А) Подойти к своему стенду и зажать E (быстрое удержание) — стреляет ИМЕННО
+--      этот стенд.
+--   Б) Кнопка ATTACK слева: открывается список ракет («Ракета N — ОТПРАВИТЬ»),
+--      можно стрелять откуда угодно, без подхода к стендам.
+-- Дальше одинаково: камера сразу у вражеского острова, A/D или ◀ ▶ листают цели
+-- (между стрелками — ник владельца), клик ставит маркер, ЗАПУСК отправляет.
+-- Сервер независимо проверяет права, остров и точку — клиенту не доверяем.
 local Players           = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local UserInputService  = game:GetService("UserInputService")
@@ -2562,6 +2608,9 @@ local HudManager = {}
 
 local animEnabled = true
 local rocketReady = Config.START_LAUNCHERS
+local launcherCount = Config.START_LAUNCHERS
+local rocketLevels = {}
+local reloadEndsAt = {} -- [index] = os.clock() + секунд до готовности
 
 -- Деньги (нижняя панель)
 local moneyText, moneyStroke, moneyLogoScale
@@ -2569,8 +2618,12 @@ local shownMoney = 0
 local moneyThread, moneyPopTween
 local flashToken = 0
 
--- Настройки (шестерёнка)
-local settingsPanel, animToggleBtn
+-- Настройки (шестерёнка) и Attack-меню
+local gearBtn, settingsPanel, animToggleBtn
+local settingsOpen = false
+local attackBtn, attackPanel
+local attackOpen = false
+local rowButtons = {}
 
 -- Состояние сценария прицеливания.
 local topBar, ownerLabel, islandLabel, hintLabel, launchButton
@@ -2579,6 +2632,7 @@ local targets = {}      -- { {plotId, ownerUserId}, ... }
 local targetIndex = 0
 local aimPos = nil
 local aimMarker = nil
+local pendingLauncherIndex = nil -- какой стенд стреляет (E у стенда / выбор в Attack)
 
 -- Заморозка передвижения на время прицеливания (камера уходит к цели).
 local humFrozen = false
@@ -2604,6 +2658,39 @@ local function makeFrame(parent, size, pos, color, alpha, name)
 	c.CornerRadius = UDim.new(0, 8)
 	c.Parent = f
 	return f
+end
+
+-- Панель с плавным появлением/исчезновением (CanvasGroup умеет фейдить всё разом).
+local function makeCanvasPanel(parent, size, pos, name)
+	local p = Instance.new("CanvasGroup")
+	p.Name = name or "Panel"
+	p.Size = size
+	p.Position = pos
+	p.BackgroundColor3 = Color3.fromRGB(14, 18, 24)
+	p.BackgroundTransparency = 0.06
+	p.BorderSizePixel = 0
+	p.GroupTransparency = 1
+	p.Visible = false
+	p.Parent = parent
+	local c = Instance.new("UICorner")
+	c.CornerRadius = UDim.new(0, 14)
+	c.Parent = p
+	return p
+end
+
+local function fadePanel(panel, open)
+	if not panel then return end
+	if open then
+		panel.Visible = true
+		panel.GroupTransparency = 1
+		TweenService:Create(panel, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { GroupTransparency = 0 }):Play()
+	else
+		local t = TweenService:Create(panel, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { GroupTransparency = 1 })
+		t.Completed:Once(function()
+			if panel.GroupTransparency >= 0.99 then panel.Visible = false end
+		end)
+		t:Play()
+	end
 end
 
 local function makeLabel(parent, text, size, pos, color, fontSize, font)
@@ -2797,6 +2884,7 @@ function HudManager.CloseTargeting()
 	targetingActive = false
 	targetIndex = 0
 	aimPos = nil
+	pendingLauncherIndex = nil
 	clearMarker()
 	restoreCamera()
 	setFrozen(false)
@@ -2858,9 +2946,9 @@ local function selectTarget(index)
 	focusCameraOnIsland(targets[targetIndex].plotId)
 end
 
--- Открыть сценарий (вызывается ProximityPrompt'ом рядом с установкой).
--- Никаких списков: камера сразу уходит на первый вражеский остров.
-function HudManager.OpenTargeting()
+-- Открыть сценарий. launcherIndex — какой стенд стреляет: с ProximityPrompt (E у
+-- конкретного стенда) или из меню Attack. Камера сразу уходит на вражеский остров.
+function HudManager.OpenTargeting(launcherIndex)
 	if targetingActive then return end
 	if player:GetAttribute("PlotId") == nil then return end
 	targets = collectTargets()
@@ -2870,9 +2958,14 @@ function HudManager.OpenTargeting()
 	end
 	targetingActive = true
 	aimPos = nil
+	pendingLauncherIndex = launcherIndex
 	clearMarker()
 	setFrozen(true)
 	setLaunchEnabled(false)
+	if attackOpen then
+		attackOpen = false
+		fadePanel(attackPanel, false)
+	end
 	if topBar then topBar.Visible = true end
 	if hintLabel then hintLabel.Visible = true end
 	if launchButton then launchButton.Visible = true end
@@ -2888,16 +2981,16 @@ local function doLaunch()
 		setHint("Сначала выберите точку удара — кликните по острову", Color3.fromRGB(255, 180, 40))
 		return
 	end
-	if rocketReady <= 0 then
+	if pendingLauncherIndex == nil and rocketReady <= 0 then
 		setHint("Все ракеты перезаряжаются", Color3.fromRGB(255, 110, 95))
 		HudManager.FlashFeedback("error")
 		return
 	end
-	local plotId, pos = entry.plotId, aimPos
+	local plotId, pos, launcherIndex = entry.plotId, aimPos, pendingLauncherIndex
 	-- Сначала закрываем UI/восстанавливаем камеру — затем сервер перехватит камеру
 	-- под облёт ракеты (RocketFollow), стартовав с обычной камеры игрока.
 	HudManager.CloseTargeting()
-	Remotes.Get("LaunchRocket"):FireServer(plotId, pos)
+	Remotes.Get("LaunchRocket"):FireServer(plotId, pos, launcherIndex)
 end
 
 -- Клик по 3D-миру в режиме прицела: ставим/переставляем маркер удара.
@@ -2922,7 +3015,8 @@ local function onWorldClick(input, gpe)
 	setHint("Точка удара выбрана — жмите ЗАПУСК", Color3.fromRGB(98, 220, 144))
 end
 
--- Создаёт ProximityPrompt на КАЖДОЙ своей установке.
+-- Создаёт ProximityPrompt на КАЖДОЙ своей установке. Стреляет ИМЕННО тот стенд,
+-- у которого стоит игрок (передаём LauncherIndex). Удержание E короткое.
 local function ensurePrompts()
 	local myId = player:GetAttribute("PlotId")
 	if myId == nil then return end
@@ -2937,13 +3031,13 @@ local function ensurePrompts()
 				prompt.Name = "LaunchPrompt"
 				prompt.ActionText = "Запуск ракеты"
 				prompt.ObjectText = "Ракетная установка"
-				prompt.HoldDuration = 0.6
+				prompt.HoldDuration = 0.25
 				prompt.KeyboardKeyCode = Enum.KeyCode.E
 				prompt.RequiresLineOfSight = false
 				prompt.MaxActivationDistance = 16
 				prompt.Parent = pad
 				prompt.Triggered:Connect(function()
-					HudManager.OpenTargeting()
+					HudManager.OpenTargeting(launcher:GetAttribute("LauncherIndex"))
 				end)
 			end
 		end
@@ -2966,6 +3060,61 @@ local function formatMoney(n)
 	return (formatted:gsub("^%s+", ""))
 end
 
+-- === Attack-меню: список ракет с кнопками «ОТПРАВИТЬ» ===
+local function updateRowStates()
+	for i, rec in pairs(rowButtons) do
+		local ends = reloadEndsAt[i]
+		local ready = not (ends and ends > os.clock())
+		if ready then
+			rec.btn.Text = "ОТПРАВИТЬ"
+			rec.btn.BackgroundColor3 = Color3.fromRGB(205, 67, 55)
+			rec.btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+			rec.btn.AutoButtonColor = true
+		else
+			rec.btn.Text = string.format("%dс", math.max(1, math.ceil(ends - os.clock())))
+			rec.btn.BackgroundColor3 = Color3.fromRGB(60, 66, 74)
+			rec.btn.TextColor3 = Color3.fromRGB(160, 168, 176)
+			rec.btn.AutoButtonColor = false
+		end
+	end
+end
+
+local function rebuildAttackRows()
+	if not attackPanel then return end
+	for _, child in ipairs(attackPanel:GetChildren()) do
+		if child.Name == "RocketRow" then child:Destroy() end
+	end
+	rowButtons = {}
+	for i = 1, launcherCount do
+		local row = Instance.new("Frame")
+		row.Name = "RocketRow"
+		row.BackgroundColor3 = Color3.fromRGB(26, 33, 42)
+		row.BackgroundTransparency = 0.15
+		row.BorderSizePixel = 0
+		row.Size = UDim2.new(1, -16, 0, 46)
+		row.Position = UDim2.new(0, 8, 0, 38 + (i - 1) * 52)
+		row.Parent = attackPanel
+		local rc = Instance.new("UICorner")
+		rc.CornerRadius = UDim.new(0, 10)
+		rc.Parent = row
+
+		makeLabel(row, string.format("🚀 Ракета %d · ур.%d", i, rocketLevels[i] or 1), UDim2.new(1, -116, 1, 0), UDim2.new(0, 10, 0, 0), Color3.fromRGB(230, 236, 240), 14, Enum.Font.GothamBold)
+
+		local btn = makeButton(row, "ОТПРАВИТЬ", UDim2.new(0, 96, 0, 32), UDim2.new(1, -104, 0.5, -16), Color3.fromRGB(205, 67, 55))
+		btn.TextSize = 13
+		local index = i
+		btn.MouseButton1Click:Connect(function()
+			if targetingActive then return end
+			local ends = reloadEndsAt[index]
+			if ends and ends > os.clock() then return end
+			HudManager.OpenTargeting(index)
+		end)
+		rowButtons[i] = { btn = btn }
+	end
+	attackPanel.Size = UDim2.new(0, 252, 0, 38 + launcherCount * 52 + 8)
+	updateRowStates()
+end
+
 function HudManager.Init(initAnimEnabled)
 	animEnabled = initAnimEnabled ~= false
 
@@ -2985,7 +3134,7 @@ function HudManager.Init(initAnimEnabled)
 	moneyStroke.Parent = moneyBar
 
 	-- Якорь по центру: масштабирование «пульса» идёт от центра, логотип всегда
-	-- отцентрован по вертикали (раньше при прокачке он «уезжал» вниз).
+	-- отцентрован по вертикали.
 	local logo = Instance.new("Frame")
 	logo.Name = "DollarLogo"
 	logo.AnchorPoint = Vector2.new(0.5, 0.5)
@@ -3007,14 +3156,40 @@ function HudManager.Init(initAnimEnabled)
 	moneyText.TextXAlignment = Enum.TextXAlignment.Left
 	moneyText.TextYAlignment = Enum.TextYAlignment.Center
 
+	-- === Кнопка ATTACK (слева, вертикально по центру) ===
+	attackBtn = makeButton(screenGui, "", UDim2.new(0, 68, 0, 68), UDim2.new(0, 12, 0.5, -34), Color3.fromRGB(178, 52, 44))
+	attackBtn:FindFirstChildOfClass("UICorner").CornerRadius = UDim.new(0, 18)
+	local attackStroke = Instance.new("UIStroke")
+	attackStroke.Color = Color3.fromRGB(255, 120, 100)
+	attackStroke.Transparency = 0.55
+	attackStroke.Thickness = 1.4
+	attackStroke.Parent = attackBtn
+	local attackIcon = makeLabel(attackBtn, "🚀", UDim2.new(1, 0, 0, 34), UDim2.new(0, 0, 0, 6), Color3.fromRGB(255, 255, 255), 24)
+	attackIcon.TextXAlignment = Enum.TextXAlignment.Center
+	local attackText = makeLabel(attackBtn, "ATTACK", UDim2.new(1, 0, 0, 16), UDim2.new(0, 0, 0, 42), Color3.fromRGB(255, 230, 225), 12, Enum.Font.GothamBlack)
+	attackText.TextXAlignment = Enum.TextXAlignment.Center
+
+	-- Панель Attack: «Ракета N — ОТПРАВИТЬ», стрелять можно без подхода к стендам.
+	attackPanel = makeCanvasPanel(screenGui, UDim2.new(0, 252, 0, 150), UDim2.new(0, 88, 0.5, 0), "AttackPanel")
+	attackPanel.AnchorPoint = Vector2.new(0, 0.5)
+	local attackTitle = makeLabel(attackPanel, "РАКЕТНЫЙ УДАР", UDim2.new(1, -20, 0, 26), UDim2.new(0, 12, 0, 6), Color3.fromRGB(236, 108, 91), 14, Enum.Font.GothamBold)
+	attackTitle.TextXAlignment = Enum.TextXAlignment.Left
+
+	attackBtn.MouseButton1Click:Connect(function()
+		if targetingActive then return end
+		attackOpen = not attackOpen
+		if attackOpen then
+			rebuildAttackRows()
+		end
+		fadePanel(attackPanel, attackOpen)
+	end)
+
 	-- === Шестерёнка настроек (правый нижний угол) ===
-	local gearBtn = makeButton(screenGui, "⚙️", UDim2.new(0, 46, 0, 46), UDim2.new(1, -58, 1, -58), Color3.fromRGB(22, 28, 36))
+	gearBtn = makeButton(screenGui, "⚙️", UDim2.new(0, 46, 0, 46), UDim2.new(1, -58, 1, -58), Color3.fromRGB(22, 28, 36))
 	gearBtn:FindFirstChildOfClass("UICorner").CornerRadius = UDim.new(1, 0)
 	gearBtn.TextSize = 22
 
-	settingsPanel = makeFrame(screenGui, UDim2.new(0, 264, 0, 64), UDim2.new(1, -276, 1, -130), Color3.fromRGB(14, 18, 24), 0.06, "SettingsPanel")
-	settingsPanel:FindFirstChildOfClass("UICorner").CornerRadius = UDim.new(0, 14)
-	settingsPanel.Visible = false
+	settingsPanel = makeCanvasPanel(screenGui, UDim2.new(0, 264, 0, 64), UDim2.new(1, -276, 1, -130), "SettingsPanel")
 
 	makeLabel(settingsPanel, "Анимация полёта ракеты", UDim2.new(1, -102, 1, 0), UDim2.new(0, 14, 0, 0), Color3.fromRGB(218, 226, 232), 14)
 
@@ -3025,8 +3200,11 @@ function HudManager.Init(initAnimEnabled)
 	end
 	refreshToggle()
 
+	-- Клик по шестерёнке: анимация прокрутки + панель плавно проявляется/гаснет.
 	gearBtn.MouseButton1Click:Connect(function()
-		settingsPanel.Visible = not settingsPanel.Visible
+		settingsOpen = not settingsOpen
+		TweenService:Create(gearBtn, TweenInfo.new(0.4, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Rotation = gearBtn.Rotation + 180 }):Play()
+		fadePanel(settingsPanel, settingsOpen)
 	end)
 	animToggleBtn.MouseButton1Click:Connect(function()
 		animEnabled = not animEnabled
@@ -3137,9 +3315,24 @@ function HudManager.Init(initAnimEnabled)
 			task.wait(1)
 		end
 	end)
+
+	-- Тикающий отсчёт перезарядки в открытом Attack-меню.
+	task.spawn(function()
+		while true do
+			if attackPanel and attackPanel.Visible then
+				updateRowStates()
+			end
+			task.wait(0.4)
+		end
+	end)
 end
 
 function HudManager.UpdateData(data)
+	rocketLevels = data.rocketLevels or rocketLevels
+	if attackPanel and attackPanel.Visible then
+		rebuildAttackRows()
+	end
+
 	local target = data.money or 0
 	if not moneyText then return end
 
@@ -3147,8 +3340,7 @@ function HudManager.UpdateData(data)
 	if moneyThread then task.cancel(moneyThread) end
 	local from = shownMoney
 	if from ~= target and moneyLogoScale then
-		-- Гасим предыдущий пульс и сбрасываем масштаб: незавершённый твин
-		-- оставлял Scale > 1 и логотип «уезжал» из центра.
+		-- Гасим предыдущий пульс и сбрасываем масштаб (иначе логотип «уезжал»).
 		if moneyPopTween then moneyPopTween:Cancel() end
 		moneyLogoScale.Scale = 1
 		moneyPopTween = TweenService:Create(moneyLogoScale, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out, 0, true), { Scale = 1.15 })
@@ -3170,6 +3362,16 @@ end
 
 function HudManager.UpdateRocketState(data)
 	rocketReady = data.ready or 0
+	launcherCount = data.launchers or launcherCount
+	reloadEndsAt = {}
+	for index, seconds in pairs(data.reloads or {}) do
+		if type(index) == "number" and type(seconds) == "number" then
+			reloadEndsAt[index] = os.clock() + seconds
+		end
+	end
+	if attackPanel and attackPanel.Visible then
+		rebuildAttackRows()
+	end
 end
 
 function HudManager.IsAnimEnabled()
@@ -3184,9 +3386,10 @@ return HudManager
           <Properties>
             <string name="Name">PriceTags</string>
             <string name="Source"><![CDATA[-- PriceTags.luau — ценники (BillboardGui "PriceTag") видны ТОЛЬКО на своём острове
--- и ТОЛЬКО когда игрок стоит рядом с кнопкой (меньше текста на экране: подошёл —
--- цена появилась, отошёл — исчезла). Сервер выставляет атрибут Unlocked и держит
--- Enabled = false для всех; клиент включает Enabled по владению + дистанции.
+-- и ТОЛЬКО когда игрок стоит рядом с кнопкой. Появление и исчезновение ПЛАВНЫЕ:
+-- подходишь — текст мягко проявляется, отходишь — мягко тает.
+-- Сервер выставляет атрибут Unlocked и держит Enabled = false; клиент управляет
+-- прозрачностью текста по владению + дистанции.
 local Players = game:GetService("Players")
 
 local player = Players.LocalPlayer
@@ -3194,8 +3397,10 @@ local player = Players.LocalPlayer
 local PriceTags = {}
 
 local SHOW_DISTANCE = 22
+local FADE_STEP = 0.22 -- доля пути к цели за тик (~0.45с на полный фейд)
 
--- Кэш ценников: { gui, part, plotId }. Пересобираем редко, дистанцию чекаем часто.
+-- Кэш ценников: { gui, part, label, plotId, alpha }. Пересобираем редко,
+-- дистанцию и фейд обсчитываем часто.
 local cache = {}
 
 local function rebuildCache()
@@ -3206,8 +3411,17 @@ local function rebuildCache()
 			for _, gui in ipairs(folder:GetDescendants()) do
 				if gui:IsA("BillboardGui") and gui.Name == "PriceTag" then
 					local part = gui.Parent
-					if part and part:IsA("BasePart") then
-						table.insert(found, { gui = gui, part = part, plotId = pid })
+					local label = gui:FindFirstChild("PriceLabel")
+					if part and part:IsA("BasePart") and label then
+						-- Сохраняем прежний альфа-прогресс, если ценник уже был в кэше.
+						local alpha = 1
+						for _, old in ipairs(cache) do
+							if old.gui == gui then
+								alpha = old.alpha
+								break
+							end
+						end
+						table.insert(found, { gui = gui, part = part, label = label, plotId = pid, alpha = alpha })
 					end
 				end
 			end
@@ -3222,11 +3436,21 @@ local function refresh()
 	local hrp = char and char:FindFirstChild("HumanoidRootPart")
 	for _, entry in ipairs(cache) do
 		if entry.gui.Parent then
-			local show = false
+			local wantVisible = false
 			if myId ~= nil and entry.plotId == myId and hrp and entry.gui:GetAttribute("Unlocked") == true then
-				show = (entry.part.Position - hrp.Position).Magnitude < SHOW_DISTANCE
+				wantVisible = (entry.part.Position - hrp.Position).Magnitude < SHOW_DISTANCE
 			end
-			entry.gui.Enabled = show
+
+			-- Плавный фейд: alpha 0 = полностью виден, 1 = полностью скрыт.
+			local target = wantVisible and 0 or 1
+			entry.alpha += (target - entry.alpha) * FADE_STEP
+			if math.abs(entry.alpha - target) < 0.02 then
+				entry.alpha = target
+			end
+
+			entry.label.TextTransparency = entry.alpha
+			entry.label.TextStrokeTransparency = 0.35 + 0.65 * entry.alpha
+			entry.gui.Enabled = entry.alpha < 0.99
 		end
 	end
 end
@@ -3243,11 +3467,11 @@ function PriceTags.Init()
 		end
 	end)
 
-	-- Дистанцию проверяем часто — ценник «зажигается», когда подходишь вплотную.
+	-- Частый тик: дистанция + плавный фейд.
 	task.spawn(function()
 		while true do
 			refresh()
-			task.wait(0.15)
+			task.wait(0.08)
 		end
 	end)
 end
@@ -3320,16 +3544,8 @@ local function spawnExplosion(pos)
 	ringTween:Play()
 	Debris:AddItem(ring, 0.6)
 
-	-- Звук взрыва в точке удара.
-	local sound = Instance.new("Sound")
-	sound.SoundId = "rbxassetid://5801257793"
-	sound.Volume = 1
-	sound.RollOffMaxDistance = 400
-	sound.RollOffMinDistance = 20
-	sound.Parent = ball
-	sound:Play()
-
-	-- НАСТОЯЩИЙ чёрный дым: клубящиеся частицы вместо серых шаров-«кругов».
+	-- Холдер живёт дольше всех эффектов — на нём и дым, и звук (раньше звук был
+	-- приделан к шару-вспышке и ОБРЫВАЛСЯ через 0.5с вместе с ним).
 	local smokeHolder = Instance.new("Part")
 	smokeHolder.Size = Vector3.new(1, 1, 1)
 	smokeHolder.Position = pos + Vector3.new(0, 2, 0)
@@ -3337,6 +3553,30 @@ local function spawnExplosion(pos)
 	smokeHolder.CanCollide = false
 	smokeHolder.Transparency = 1
 	smokeHolder.Parent = workspace
+
+	-- Звук взрыва: плавный ВХОД (без резкого щелчка в начале), реверб-хвост и
+	-- плавный ВЫХОД — звучит мягче и не обрезается с двух концов.
+	local sound = Instance.new("Sound")
+	sound.SoundId = "rbxassetid://5801257793"
+	sound.Volume = 0
+	sound.PlaybackSpeed = 0.95
+	sound.RollOffMaxDistance = 400
+	sound.RollOffMinDistance = 20
+	sound.Parent = smokeHolder
+
+	local reverb = Instance.new("ReverbSoundEffect")
+	reverb.DecayTime = 1.5
+	reverb.Density = 0.8
+	reverb.WetLevel = -8
+	reverb.Parent = sound
+
+	sound:Play()
+	TweenService:Create(sound, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Volume = 0.85 }):Play()
+	task.delay(1.3, function()
+		if sound.Parent then
+			TweenService:Create(sound, TweenInfo.new(1.1, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { Volume = 0 }):Play()
+		end
+	end)
 
 	local smoke = Instance.new("ParticleEmitter")
 	smoke.Name = "ImpactSmoke"

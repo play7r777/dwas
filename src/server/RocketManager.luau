@@ -46,25 +46,9 @@ local function notify(player, message, kind)
 	Remotes.Get("Notify"):FireClient(player, message, kind or "info")
 end
 
--- Авторитетная проверка близости: стрелок обязан стоять рядом с одной из СВОИХ
--- установок (не дальше Config.LAUNCH_MAX_DISTANCE по горизонтали). Клиент открывает
--- прицел только вблизи установки, но сервер не доверяет этому и проверяет сам.
-local function nearOwnLauncher(player)
-	local char = player.Character
-	local hrp = char and char:FindFirstChild("HumanoidRootPart")
-	if not hrp then return false end
-	local maxDist = Config.LAUNCH_MAX_DISTANCE
-	for index = 1, DataManager.GetLauncherCount(player) do
-		local origin = PlotManager.GetLauncherOrigin(player, index)
-		if origin then
-			local flat = Vector3.new(hrp.Position.X - origin.X, 0, hrp.Position.Z - origin.Z)
-			if flat.Magnitude <= maxDist then
-				return true
-			end
-		end
-	end
-	return false
-end
+-- Близость к установке больше НЕ требуется: ракету можно отправить и с кнопки
+-- Attack (удалённо). Если клиент передал номер стенда (стоял у него по E или
+-- выбрал в меню) — летит ИМЕННО этот стенд, а не первый готовый.
 
 -- Летящая ракета строится СЕРВЕРОМ (реплицируется всем) из ТОГО ЖЕ конструктора,
 -- что и стенд на базе (RocketFactory): то же поколение Mark, тот же цвет команды,
@@ -111,6 +95,26 @@ local function buildFlyingRocket(originPos, mark, teamColor)
 	light.Color = Color3.fromRGB(255, 150, 50)
 	light.Parent = root
 
+	-- Звук полёта: свист двигателя (луп, встроенный ассет Roblox — всегда доступен)
+	-- и «выстрел» на старте. Громкость лупа плавно гасится перед прилётом.
+	local whoosh = Instance.new("Sound")
+	whoosh.Name = "FlightLoop"
+	whoosh.SoundId = "rbxasset://sounds/Rocket whoosh 01.wav"
+	whoosh.Looped = true
+	whoosh.Volume = 0
+	whoosh.RollOffMinDistance = 15
+	whoosh.RollOffMaxDistance = 350
+	whoosh.Parent = root
+	whoosh:Play()
+
+	local shot = Instance.new("Sound")
+	shot.Name = "LaunchShot"
+	shot.SoundId = "rbxasset://sounds/Rocket shot.wav"
+	shot.Volume = 0.65
+	shot.RollOffMaxDistance = 300
+	shot.Parent = root
+	shot:Play()
+
 	return model
 end
 
@@ -132,6 +136,8 @@ local function flyRocket(shooter, originPos, targetPos, mark, teamColor, onImpac
 	end
 
 	task.spawn(function()
+		local root = model.PrimaryPart
+		local whoosh = root and root:FindFirstChild("FlightLoop")
 		local dist = (targetPos - originPos).Magnitude
 		local duration = math.clamp(dist / Config.ROCKET_SPEED, 0.9, Config.ROCKET_ANIM_TIME)
 		local elapsed = 0
@@ -146,6 +152,16 @@ local function flyRocket(shooter, originPos, targetPos, mark, teamColor, onImpac
 				model:PivotTo(CFrame.lookAt(pos, pos + dir))
 			else
 				model:PivotTo(CFrame.new(pos))
+			end
+			-- Плавная огибающая свиста: быстрый вход в начале, затухание к прилёту.
+			if whoosh then
+				if t < 0.12 then
+					whoosh.Volume = 0.55 * (t / 0.12)
+				elseif t > 0.85 then
+					whoosh.Volume = 0.55 * math.max(0, 1 - (t - 0.85) / 0.15)
+				else
+					whoosh.Volume = 0.55
+				end
 			end
 		end
 		model:Destroy()
@@ -242,20 +258,38 @@ local function onPadStep(player, index)
 	end
 end
 
-local function takeReadyLauncher(player)
+-- Пытается «застолбить» конкретный стенд: ставит его на перезарядку и возвращает true.
+local function tryTakeLauncher(player, index)
 	local now = workspace:GetServerTimeNow()
-	for index = 1, DataManager.GetLauncherCount(player) do
-		if (launcherReady[player] and launcherReady[player][index] or 0) <= now then
-			launcherReady[player][index] = now + Config.ROCKET_RELOAD
-			PlotManager.SetLauncherReady(player, index, false)
-			sendRocketState(player)
-			task.delay(Config.ROCKET_RELOAD, function()
-				if player.Parent and launcherReady[player] and launcherReady[player][index] then
-					launcherReady[player][index] = 0
-					PlotManager.SetLauncherReady(player, index, true)
-					sendRocketState(player)
-				end
-			end)
+	launcherReady[player] = launcherReady[player] or {}
+	if (launcherReady[player][index] or 0) <= now then
+		launcherReady[player][index] = now + Config.ROCKET_RELOAD
+		PlotManager.SetLauncherReady(player, index, false)
+		sendRocketState(player)
+		task.delay(Config.ROCKET_RELOAD, function()
+			if player.Parent and launcherReady[player] and launcherReady[player][index] then
+				launcherReady[player][index] = 0
+				PlotManager.SetLauncherReady(player, index, true)
+				sendRocketState(player)
+			end
+		end)
+		return true
+	end
+	return false
+end
+
+-- preferredIndex: стенд, у которого игрок стоял (E) или который выбрал в меню
+-- Attack — стреляет ИМЕННО он. Без preferredIndex берём первый готовый.
+local function takeReadyLauncher(player, preferredIndex)
+	local count = DataManager.GetLauncherCount(player)
+	if preferredIndex then
+		if preferredIndex >= 1 and preferredIndex <= count and tryTakeLauncher(player, preferredIndex) then
+			return preferredIndex
+		end
+		return nil
+	end
+	for index = 1, count do
+		if tryTakeLauncher(player, index) then
 			return index
 		end
 	end
@@ -312,8 +346,9 @@ function RocketManager.Init()
 		notify(player, string.format("Установка %d построена", result), "success")
 	end)
 
-	-- Клиент шлёт целевой остров и (опционально) точную точку прицела (raycast по 3D-миру).
-	launchEvent.OnServerEvent:Connect(function(player, targetPlotId, targetPos)
+	-- Клиент шлёт целевой остров, точку прицела (raycast по 3D-миру) и, опционально,
+	-- номер стенда (стоял у него по E / выбрал в меню Attack).
+	launchEvent.OnServerEvent:Connect(function(player, targetPlotId, targetPos, launcherIndexArg)
 		local now = os.clock()
 		if now - (lastRequest[player] or 0) < 0.2 then return end
 		lastRequest[player] = now
@@ -327,15 +362,14 @@ function RocketManager.Init()
 			return
 		end
 
-		-- Дистанция: стрелок должен стоять рядом со своей установкой.
-		if not nearOwnLauncher(player) then
-			notify(player, "Подойдите к своей ракетной установке", "error")
-			return
+		local preferredIndex = nil
+		if type(launcherIndexArg) == "number" and launcherIndexArg % 1 == 0 then
+			preferredIndex = launcherIndexArg
 		end
 
-		local launcherIndex = takeReadyLauncher(player)
+		local launcherIndex = takeReadyLauncher(player, preferredIndex)
 		if not launcherIndex then
-			notify(player, "Все ракеты перезаряжаются", "error")
+			notify(player, preferredIndex and "Эта ракета перезаряжается" or "Все ракеты перезаряжаются", "error")
 			return
 		end
 		local originPos = PlotManager.GetLauncherOrigin(player, launcherIndex)

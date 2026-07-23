@@ -351,16 +351,17 @@ local function buildIslandModel(plotId, position)
 		billboard:SetAttribute("Unlocked", slotIdx == 1)
 		billboard.Parent = buyPad
 
+		-- Жирный читаемый шрифт (тонкий Medium выглядел «мерзко» на фоне мира).
 		local priceLabel = Instance.new("TextLabel")
 		priceLabel.Name = "PriceLabel"
 		priceLabel.Size = UDim2.new(1, 0, 1, 0)
 		priceLabel.BackgroundTransparency = 1
 		priceLabel.TextScaled = false
-		priceLabel.TextSize = 15
-		priceLabel.Font = Enum.Font.GothamMedium
-		priceLabel.TextColor3 = Color3.fromRGB(240, 244, 246)
+		priceLabel.TextSize = 16
+		priceLabel.Font = Enum.Font.GothamBold
+		priceLabel.TextColor3 = Color3.fromRGB(245, 248, 250)
 		priceLabel.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
-		priceLabel.TextStrokeTransparency = 0.5
+		priceLabel.TextStrokeTransparency = 0.35
 		local cfg = Config.FARM_TYPES[slotIdx]
 		priceLabel.Text = string.format("%s\n$%d", cfg.name, cfg.cost)
 		priceLabel.Parent = billboard
@@ -408,11 +409,11 @@ local function buildIslandModel(plotId, position)
 		label.Size = UDim2.new(1, 0, 1, 0)
 		label.BackgroundTransparency = 1
 		label.TextScaled = false
-		label.TextSize = 15
-		label.Font = Enum.Font.GothamMedium
-		label.TextColor3 = Color3.fromRGB(240, 244, 246)
+		label.TextSize = 16
+		label.Font = Enum.Font.GothamBold
+		label.TextColor3 = Color3.fromRGB(245, 248, 250)
 		label.TextStrokeColor3 = Color3.fromRGB(0, 0, 0)
-		label.TextStrokeTransparency = 0.5
+		label.TextStrokeTransparency = 0.35
 		label.Text = ""
 		label.Parent = billboard
 
