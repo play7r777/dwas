@@ -726,7 +726,6 @@ local function buildBuildingModel(plotId, slotIndex, tier, level, territoryFolde
 	local baseCF = CFrame.lookAt(slotCenter, Vector3.new(plot.center.X, slotCenter.Y, plot.center.Z))
 
 	local style = TIER_STYLES[tier]
-	local income = Config.IncomeForLevel(tier, level)
 	local home = Instance.new("Model")
 	home.Name = "IncomeHome_" .. slotIndex
 	home:SetAttribute("Alive", true)
@@ -853,23 +852,9 @@ local function buildBuildingModel(plotId, slotIndex, tier, level, territoryFolde
 		end
 	end
 
-	local gui = Instance.new("BillboardGui")
-	gui.Name = "StatusGui"
-	gui.Size = UDim2.new(0, 150, 0, 30)
-	gui.StudsOffset = Vector3.new(0, 6, 0)
-	gui.AlwaysOnTop = false
-	gui.Parent = roofCore
-	local statusLabel = Instance.new("TextLabel")
-	statusLabel.Size = UDim2.new(1, 0, 1, 0)
-	statusLabel.BackgroundTransparency = 1
-	statusLabel.Text = string.format("ур.%d  +$%d", level, income)
-	statusLabel.TextColor3 = Color3.fromRGB(129, 255, 161)
-	statusLabel.TextStrokeTransparency = 0.55
-	statusLabel.TextScaled = true
-	statusLabel.Font = Enum.Font.GothamBold
-	statusLabel.Parent = gui
-
-	return home, roofCore, nil, statusLabel
+	-- Статичной таблички «ур.N +$X» над зданием больше НЕТ (чистый экран):
+	-- прибыль видно по всплывающим «+$» (VisualFX), уровень — по этажам дома.
+	return home, roofCore, nil, nil
 end
 
 -- Обновляет ценник над кнопкой: покупка / прокачка до след. уровня / макс.
@@ -1034,19 +1019,40 @@ local function destroyBuilding(plotId, slotIndex)
 	end)
 end
 
-local buyDebounce = {}
+-- Анти-двойное списание: после срабатывания кнопки игрок обязан СОЙТИ с неё
+-- (отойти от центра дальше радиуса), прежде чем она сработает снова. Раньше,
+-- стоя на кнопке, Touched стрелял повторно каждую секунду — списывалось больше,
+-- чем показывал ценник (баг «стоит 410, списалось ~700»).
+local padLock = {} -- [key] = { player, pos, radius }
+
+task.spawn(function()
+	while true do
+		task.wait(0.25)
+		for key, rec in pairs(padLock) do
+			local char = rec.player and rec.player.Character
+			local hrp = char and char:FindFirstChild("HumanoidRootPart")
+			if not rec.player.Parent or not hrp then
+				padLock[key] = nil
+			else
+				local flat = Vector3.new(hrp.Position.X - rec.pos.X, 0, hrp.Position.Z - rec.pos.Z)
+				if flat.Magnitude > rec.radius then
+					padLock[key] = nil
+				end
+			end
+		end
+	end
+end)
 
 function FarmManager.Init()
 	for plotId, plot in pairs(PlotManager.GetAllPlots()) do
 		for slotIdx, slotInfo in ipairs(plot.slots) do
-			-- Покупка/прокачка по НАСТУПАНИЮ на кнопку (с дебаунсом ~1с и проверкой владельца).
+			-- Покупка/прокачка по НАСТУПАНИЮ на кнопку: ровно ОДИН раз за визит.
 			slotInfo.buyPad.Touched:Connect(function(hit)
 				local player = Players:GetPlayerFromCharacter(hit.Parent)
 				if not player or plot.owner ~= player then return end
 				local key = string.format("%d:%d:%d", player.UserId, plotId, slotIdx)
-				local now = os.clock()
-				if buyDebounce[key] and now - buyDebounce[key] < 1 then return end
-				buyDebounce[key] = now
+				if padLock[key] then return end
+				padLock[key] = { player = player, pos = slotInfo.buyPad.Position, radius = 7 }
 				FarmManager.BuyOrUpgrade(player, slotIdx)
 			end)
 		end
@@ -1260,12 +1266,14 @@ return FarmManager
 --
 -- v3: восемь КРУПНЫХ островов кольцом вокруг пустого центра (центральный остров
 -- убран). На каждом острове 4 ракетных стенда; перед каждым — зелёный круг
--- покупки/прокачки. Внешний вид ракеты меняется каждые 5 уровней (Mark I..IV).
+-- покупки/прокачки. Внешний вид ракеты меняется каждые 5 уровней (Mark I..IV),
+-- геометрия ракеты общая с летящей ракетой (см. RocketFactory).
 
 local Players           = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local sharedFolder      = ReplicatedStorage:WaitForChild("Shared", 10)
 local Config            = require(sharedFolder:WaitForChild("Config"))
+local RocketFactory     = require(script.Parent:WaitForChild("RocketFactory"))
 
 local PlotManager = {}
 
@@ -1323,12 +1331,14 @@ local function makeWedge(parent, name, size, cframe, color, material)
 	return part
 end
 
+-- Акула плавает ПОД водой и периодически всплывает так, что над поверхностью
+-- видно ТОЛЬКО спинной плавник (как в кино) — тело никогда не выходит из воды.
 local function buildShark(parent, index)
 	local model = Instance.new("Model")
 	model.Name = "Shark_" .. index
 	model.Parent = parent
 
-	-- Центр карты теперь пустая вода — акулы кружат именно там.
+	-- Центр карты — пустая вода: акулы кружат именно там.
 	local radius = 130 + (index % 4) * 70
 	local angle = index / 16 * math.pi * 2
 	local body = makePart(model, "Body", Vector3.new(4, 4, 13), CFrame.new(), Color3.fromRGB(67, 88, 101), Enum.Material.SmoothPlastic)
@@ -1342,10 +1352,17 @@ local function buildShark(parent, index)
 
 	task.spawn(function()
 		local t = angle
+		local phase = index * 1.3
+		-- Глубина "дышит" синусом: от -13 (глубоко) до -3 (у самой поверхности).
+		-- На пике всплытия верх тела остаётся под водой, наружу торчит только плавник.
+		local function depthAt(tt)
+			return (Config.WATER_LEVEL - 3) - (math.sin(tt * 2.2 + phase) + 1) * 5
+		end
 		while model.Parent do
 			t += 0.007
-			local position = Vector3.new(math.cos(t) * radius, Config.WATER_LEVEL - 15, math.sin(t) * radius)
-			local nextPosition = Vector3.new(math.cos(t + 0.03) * radius, position.Y, math.sin(t + 0.03) * radius)
+			local y = depthAt(t)
+			local position = Vector3.new(math.cos(t) * radius, y, math.sin(t) * radius)
+			local nextPosition = Vector3.new(math.cos(t + 0.03) * radius, depthAt(t + 0.03), math.sin(t + 0.03) * radius)
 			model:PivotTo(CFrame.lookAt(position, nextPosition))
 			fin.CFrame = body.CFrame * CFrame.new(0, 3, 1) * CFrame.Angles(0, 0, math.rad(45))
 			tail.CFrame = body.CFrame * CFrame.new(0, 0, 7)
@@ -1414,6 +1431,26 @@ local function buildIslandBase(folder, position, sandColor)
 	return sand, sandRadius
 end
 
+-- Деревянный трап с воды на южный берег: выпал за остров — заплыл к трапу
+-- и поднялся обратно (раньше с воды было не залезть).
+local function buildReturnRamp(folder, position)
+	local ramp = makeWedge(
+		folder,
+		"ReturnRamp",
+		Vector3.new(10, 22, 48),
+		-- lookAt от острова: локальный +Z (высокая грань клина) смотрит на остров.
+		CFrame.lookAt(position + Vector3.new(0, -1, 112), position + Vector3.new(0, -1, 200)),
+		Color3.fromRGB(128, 90, 50),
+		Enum.Material.WoodPlanks
+	)
+	ramp.CanCollide = true
+
+	-- Пара свай у нижнего (водного) конца трапа
+	for _, x in ipairs({ -4, 4 }) do
+		makeCylinder(folder, "RampPost", 14, 1.4, position + Vector3.new(x, -17, 128), Color3.fromRGB(73, 52, 34), Enum.Material.Wood)
+	end
+end
+
 -- Большая красивая пальма: изогнутый ствол из сегментов-цилиндров, крона из листьев и кокосы.
 local function buildPalm(parent, basePos, yawDeg, scale)
 	local model = Instance.new("Model")
@@ -1468,7 +1505,7 @@ local function buildPalm(parent, basePos, yawDeg, scale)
 end
 
 -- Расставляет пальмы и камни по песчаному кольцу острова, обходя зону ракетных
--- стендов (северная полоса), точку спавна и центр-лужайку.
+-- стендов (северная полоса), точку спавна, южный коридор к трапу и центр-лужайку.
 local function buildIslandDecor(parent, position, plotId)
 	local decor = Instance.new("Folder")
 	decor.Name = "IslandDecor"
@@ -1489,7 +1526,9 @@ local function buildIslandDecor(parent, position, plotId)
 		local dz = pos.Z - position.Z
 		-- Полоса ракетных стендов и зелёных кругов: не сажаем пальмы внутрь.
 		local inLauncherZone = dz > -44 and dz < -8 and math.abs(dx) < 56
-		if not inLauncherZone and (pos - spawnPos).Magnitude > 14 then
+		-- Южный коридор к трапу (путь с воды к спавну) держим свободным.
+		local inRampCorridor = dz > 26 and math.abs(dx) < 9
+		if not inLauncherZone and not inRampCorridor and (pos - spawnPos).Magnitude > 14 then
 			buildPalm(decor, pos, math.deg(ang) + math.random(-40, 40), 0.85 + math.random() * 0.55)
 			placed += 1
 		end
@@ -1500,111 +1539,6 @@ local function buildIslandDecor(parent, position, plotId)
 		local rock = makePart(decor, "BeachRock_" .. index, Vector3.new(5 + index, 3 + index % 2, 5 + index), CFrame.new(position + offset), Color3.fromRGB(111, 105, 91), Enum.Material.Rock)
 		rock.Shape = Enum.PartType.Ball
 	end
-end
-
--- === Ракеты четырёх поколений (Mark I..IV) ===
--- Ракеты v3 стали ШИРЕ и ВЫШЕ; каждые 5 уровней прокачки стенд перестраивается
--- в следующий Mark (см. Config.RocketMark + PlotManager.RebuildLauncher).
-local MARK_SPECS = {
-	[1] = { -- классическая белая ракета
-		dia = 4.6, bodyH = 15, noseH = 4.5, finH = 6.4, boosters = 0, rings = 0,
-		bodyColor = Color3.fromRGB(236, 239, 241), bodyMat = Enum.Material.SmoothPlastic,
-	},
-	[2] = { -- с двумя боковыми ускорителями
-		dia = 5.0, bodyH = 18, noseH = 5.2, finH = 7.2, boosters = 2, rings = 1,
-		bodyColor = Color3.fromRGB(240, 243, 244), bodyMat = Enum.Material.SmoothPlastic,
-	},
-	[3] = { -- тяжёлая тёмная с неоновыми кольцами
-		dia = 5.6, bodyH = 21, noseH = 5.8, finH = 8, boosters = 0, rings = 3,
-		bodyColor = Color3.fromRGB(60, 64, 72), bodyMat = Enum.Material.Metal, dark = true,
-	},
-	[4] = { -- флагман: три ускорителя, золотой нос и неоновое гало
-		dia = 6.0, bodyH = 23, noseH = 6.4, finH = 9, boosters = 3, rings = 2,
-		bodyColor = Color3.fromRGB(245, 246, 248), bodyMat = Enum.Material.SmoothPlastic,
-		goldAccent = true, halo = true,
-	},
-}
-
--- Строит ракету поколения mark над basePos (уровень песка). Возвращает список
--- частей (для скрытия на перезарядке), иллюминатор и точку вылета (нос).
-local function buildRocketModel(model, basePos, teamColor, mark)
-	local spec = MARK_SPECS[mark] or MARK_SPECS[1]
-	local accent = spec.goldAccent and Color3.fromRGB(255, 199, 70) or teamColor
-	local parts = {}
-	local function reg(part)
-		part.CanCollide = false
-		table.insert(parts, part)
-		return part
-	end
-
-	local bottomY = basePos.Y + 0.65 -- верх бетонной площадки
-
-	-- Двигательный отсек: сопло, юбка и тёплое свечение
-	reg(makeCylinder(model, "Nozzle", 2.2, spec.dia * 0.62, Vector3.new(basePos.X, bottomY + 1.1, basePos.Z), Color3.fromRGB(40, 42, 46), Enum.Material.Metal))
-	reg(makeCylinder(model, "Skirt", 1.6, spec.dia * 0.92, Vector3.new(basePos.X, bottomY + 2.6, basePos.Z), Color3.fromRGB(70, 74, 80), Enum.Material.Metal))
-	reg(makeCylinder(model, "EngineGlow", 0.5, spec.dia * 0.5, Vector3.new(basePos.X, bottomY + 0.35, basePos.Z), Color3.fromRGB(255, 170, 60), Enum.Material.Neon))
-
-	-- Корпус
-	local bodyH = spec.bodyH
-	local bodyCenterY = bottomY + 3.4 + bodyH / 2
-	local body = makeCylinder(model, "Body", bodyH, spec.dia, Vector3.new(basePos.X, bodyCenterY, basePos.Z), spec.bodyColor, spec.bodyMat)
-	table.insert(parts, body)
-
-	-- Полоса команды + неоновые кольца прокачанных версий
-	reg(makeCylinder(model, "Stripe", 2.0, spec.dia * 1.04, Vector3.new(basePos.X, bodyCenterY + bodyH * 0.18, basePos.Z), accent, Enum.Material.SmoothPlastic))
-	for r = 1, (spec.rings or 0) do
-		local ringY = bodyCenterY - bodyH / 2 + bodyH * r / (spec.rings + 1)
-		reg(makeCylinder(model, "Ring_" .. r, 0.7, spec.dia * 1.06, Vector3.new(basePos.X, ringY, basePos.Z), spec.dark and teamColor or accent, Enum.Material.Neon))
-	end
-
-	-- Иллюминатор смотрит на центр острова (+Z от стенда)
-	local window = makePart(model, "Window", Vector3.new(0.5, 1.6, 1.6), CFrame.new(Vector3.new(basePos.X, bodyCenterY + bodyH * 0.32, basePos.Z + spec.dia / 2 + 0.05)) * CFrame.Angles(0, math.rad(90), 0), Color3.fromRGB(125, 214, 238), Enum.Material.Glass)
-	window.Shape = Enum.PartType.Cylinder
-	window.CanCollide = false
-
-	-- Конусообразный нос из сужающихся секций + шпиль
-	local noseBottom = bodyCenterY + bodyH / 2
-	local noseSegs = 5
-	for i = 1, noseSegs do
-		local d = spec.dia * (1 - (i / noseSegs) * 0.82)
-		local segH = spec.noseH / noseSegs
-		reg(makeCylinder(model, "Nose_" .. i, segH, math.max(d, 0.6), Vector3.new(basePos.X, noseBottom + (i - 0.5) * segH, basePos.Z), accent, Enum.Material.SmoothPlastic))
-	end
-	local tipY = noseBottom + spec.noseH
-	reg(makePart(model, "Tip", Vector3.new(0.5, 2.2, 0.5), CFrame.new(Vector3.new(basePos.X, tipY + 0.9, basePos.Z)), Color3.fromRGB(226, 228, 232), Enum.Material.Metal))
-
-	-- Неоновое гало флагмана
-	if spec.halo then
-		local halo = makeCylinder(model, "Halo", 0.4, spec.dia + 3, Vector3.new(basePos.X, tipY - 1, basePos.Z), accent, Enum.Material.Neon)
-		halo.Transparency = 0.3
-		reg(halo)
-	end
-
-	-- Боковые ускорители
-	if (spec.boosters or 0) > 0 then
-		local boosterD = spec.dia * 0.36
-		local boosterH = bodyH * 0.55
-		for i = 1, spec.boosters do
-			local a = math.rad(360 / spec.boosters * i + 90)
-			local bx = basePos.X + math.cos(a) * (spec.dia / 2 + boosterD / 2 + 0.1)
-			local bz = basePos.Z + math.sin(a) * (spec.dia / 2 + boosterD / 2 + 0.1)
-			reg(makeCylinder(model, "Booster_" .. i, boosterH, boosterD, Vector3.new(bx, bottomY + 2.0 + boosterH / 2, bz), spec.bodyColor, spec.bodyMat))
-			reg(makeCylinder(model, "BoosterNose_" .. i, 1.4, boosterD * 0.55, Vector3.new(bx, bottomY + 2.0 + boosterH + 0.7, bz), accent, Enum.Material.SmoothPlastic))
-		end
-	end
-
-	-- Стабилизаторы
-	for i = 1, 4 do
-		local a = math.rad(i * 90 + 45)
-		local dist = spec.dia / 2 + 0.9
-		local finPos = Vector3.new(basePos.X + math.cos(a) * dist, bottomY + spec.finH / 2 + 0.4, basePos.Z + math.sin(a) * dist)
-		local fin = makeWedge(model, "Fin_" .. i, Vector3.new(0.7, spec.finH, 3.6), CFrame.new(finPos) * CFrame.Angles(0, -a + math.rad(90), 0), accent, Enum.Material.SmoothPlastic)
-		fin.CanCollide = false
-		table.insert(parts, fin)
-	end
-
-	local origin = Vector3.new(basePos.X, tipY + 2, basePos.Z)
-	return parts, window, origin
 end
 
 local function buildIslandModel(plotId, position)
@@ -1619,6 +1553,7 @@ local function buildIslandModel(plotId, position)
 	-- Единые сплошные цилиндры вместо перекрывающихся сегментов (устраняет z-fighting песка).
 	buildIslandBase(folder, position, Color3.fromRGB(235, 211, 149))
 	buildIslandDecor(folder, position, plotId)
+	buildReturnRamp(folder, position)
 
 	-- Спавн НЕВИДИМ: раньше это был "второй квадрат песка", плававший над пляжем
 	-- рядом с ракетой. Точка респавна работает, но геометрии больше не видно.
@@ -1668,8 +1603,9 @@ local function buildIslandModel(plotId, position)
 		buyPad.Parent = folder
 
 		-- Ценник над кнопкой. Enabled = false: видимостью управляет клиент
-		-- (PriceTags) — ценники показываются ТОЛЬКО на своём острове. Атрибут
-		-- Unlocked отражает, открыт ли слот (последовательное открытие слотов).
+		-- (PriceTags) — ценники показываются ТОЛЬКО на своём острове и ТОЛЬКО
+		-- когда игрок стоит рядом (меньше текста на экране). Атрибут Unlocked
+		-- отражает, открыт ли слот (последовательное открытие слотов).
 		local billboard = Instance.new("BillboardGui")
 		billboard.Name = "PriceTag"
 		billboard.Size = UDim2.new(0, 150, 0, 44)
@@ -1786,6 +1722,12 @@ function PlotManager.Init()
 	-- Центральный остров убран: центр карты — открытая вода с акулами.
 	local oldCentral = workspace:FindFirstChild("CentralIsland")
 	if oldCentral then oldCentral:Destroy() end
+	-- Убираем «зелёную поляну под водой» — Baseplate/спавн из шаблона Studio,
+	-- если они остались в place-файле (по ним и "ходили" акулы).
+	for _, strayName in ipairs({ "Baseplate", "SpawnLocation" }) do
+		local stray = workspace:FindFirstChild(strayName)
+		if stray then stray:Destroy() end
+	end
 
 	buildOcean()
 
@@ -1824,6 +1766,29 @@ function PlotManager.Init()
 			playerPlot[player] = nil
 		end
 	end)
+
+	-- Страховка «выпал за карту»: раз в 3 секунды возвращаем на спавн тех, кто
+	-- провалился под дно или уплыл за границу мира.
+	task.spawn(function()
+		local half = Config.WORLD_SIZE / 2 + 60
+		while true do
+			task.wait(3)
+			for _, player in ipairs(Players:GetPlayers()) do
+				local char = player.Character
+				local hrp = char and char:FindFirstChild("HumanoidRootPart")
+				if hrp then
+					local p = hrp.Position
+					if p.Y < Config.SEABED_LEVEL - 2 or math.abs(p.X) > half or math.abs(p.Z) > half then
+						local id = playerPlot[player]
+						local plot = id and plots[id]
+						if plot then
+							char:PivotTo(plot.spawn.CFrame + Vector3.new(0, 4, 0))
+						end
+					end
+				end
+			end
+		end
+	end)
 end
 
 -- Создание стенда с ракетой нужного поколения (level определяет Mark).
@@ -1851,7 +1816,9 @@ function PlotManager.CreateLauncher(player, launcherIndex, level)
 	local rim = makeCylinder(model, "ReadyRim", 0.5, 14.4, basePos + Vector3.new(0, 0.66, 0), teamColor, Enum.Material.Neon)
 	rim.CanCollide = false
 
-	local parts, window, origin = buildRocketModel(model, basePos, teamColor, mark)
+	-- Сама ракета — из общего конструктора (та же геометрия, что у летящей).
+	local parts, window, height = RocketFactory.Build(model, CFrame.new(basePos + Vector3.new(0, 0.65, 0)), teamColor, mark, 1, true)
+	local origin = Vector3.new(basePos.X, basePos.Y + 0.65 + height + 2, basePos.Z)
 
 	-- Запуск идёт через прицел (клавиша E на стенде), см. HudManager.
 
@@ -1947,6 +1914,158 @@ return PlotManager
       </Item>
       <Item class="ModuleScript" referent="15">
         <Properties>
+          <string name="Name">RocketFactory</string>
+          <string name="Source"><![CDATA[-- RocketFactory.luau — единая геометрия ракеты.
+--
+-- И стенд на базе (PlotManager), и летящая ракета (RocketManager) собираются
+-- ЭТОЙ функцией — поэтому ракета в полёте выглядит ТОЧНО так же, как на базе:
+-- то же поколение (Mark I..IV), тот же цвет команды, те же детали.
+local RocketFactory = {}
+
+local GOLD = Color3.fromRGB(255, 199, 70)
+
+-- Поколения ракет: внешний вид меняется каждые 5 уровней прокачки.
+RocketFactory.MARK_SPECS = {
+	[1] = { -- классическая белая ракета
+		dia = 4.6, bodyH = 15, noseH = 4.5, finH = 6.4, boosters = 0, rings = 0,
+		bodyColor = Color3.fromRGB(236, 239, 241), bodyMat = Enum.Material.SmoothPlastic,
+	},
+	[2] = { -- с двумя боковыми ускорителями
+		dia = 5.0, bodyH = 18, noseH = 5.2, finH = 7.2, boosters = 2, rings = 1,
+		bodyColor = Color3.fromRGB(240, 243, 244), bodyMat = Enum.Material.SmoothPlastic,
+	},
+	[3] = { -- тяжёлая тёмная с неоновыми кольцами
+		dia = 5.6, bodyH = 21, noseH = 5.8, finH = 8, boosters = 0, rings = 3,
+		bodyColor = Color3.fromRGB(60, 64, 72), bodyMat = Enum.Material.Metal, dark = true,
+	},
+	[4] = { -- флагман: три ускорителя, золотой нос и неоновое гало
+		dia = 6.0, bodyH = 23, noseH = 6.4, finH = 9, boosters = 3, rings = 2,
+		bodyColor = Color3.fromRGB(245, 246, 248), bodyMat = Enum.Material.SmoothPlastic,
+		goldAccent = true, halo = true,
+	},
+}
+
+function RocketFactory.GetSpec(mark)
+	return RocketFactory.MARK_SPECS[mark] or RocketFactory.MARK_SPECS[1]
+end
+
+-- Полная высота ракеты (от низа сопла до кончика шпиля) с учётом масштаба.
+function RocketFactory.GetHeight(mark, scale)
+	local spec = RocketFactory.GetSpec(mark)
+	return (3.4 + spec.bodyH + spec.noseH + 2.0) * (scale or 1)
+end
+
+-- Строит ракету вдоль +Y базового CFrame: низ сопла на локальном y = 0.
+-- scale — общий масштаб (1 для стенда, ~0.5 для летящей).
+-- collideBody = true делает корпус коллизионным (только для стенда).
+-- Возвращает: parts (для скрытия при перезарядке), window, height.
+function RocketFactory.Build(model, baseCF, teamColor, mark, scale, collideBody)
+	local spec = RocketFactory.GetSpec(mark)
+	local s = scale or 1
+	local accent = spec.goldAccent and GOLD or teamColor
+	local parts = {}
+
+	local function newPart(name, size, cf, color, material)
+		local part = Instance.new("Part")
+		part.Name = name
+		part.Anchored = true
+		part.CanCollide = false
+		part.Size = size
+		part.CFrame = cf
+		part.Color = color
+		part.Material = material
+		part.TopSurface = Enum.SurfaceType.Smooth
+		part.BottomSurface = Enum.SurfaceType.Smooth
+		part.Parent = model
+		return part
+	end
+
+	-- Вертикальный цилиндр в локальных координатах ракеты (ось = +Y базы).
+	local function cyl(name, height, diameter, x, y, z, color, material)
+		local part = newPart(name, Vector3.new(height * s, diameter * s, diameter * s), baseCF * CFrame.new(x * s, y * s, z * s) * CFrame.Angles(0, 0, math.rad(90)), color, material)
+		part.Shape = Enum.PartType.Cylinder
+		table.insert(parts, part)
+		return part
+	end
+
+	-- Двигательный отсек: сопло, юбка и тёплое свечение
+	cyl("Nozzle", 2.2, spec.dia * 0.62, 0, 1.1, 0, Color3.fromRGB(40, 42, 46), Enum.Material.Metal)
+	cyl("Skirt", 1.6, spec.dia * 0.92, 0, 2.6, 0, Color3.fromRGB(70, 74, 80), Enum.Material.Metal)
+	cyl("EngineGlow", 0.5, spec.dia * 0.5, 0, 0.35, 0, Color3.fromRGB(255, 170, 60), Enum.Material.Neon)
+
+	-- Корпус
+	local bodyCenterY = 3.4 + spec.bodyH / 2
+	local body = cyl("Body", spec.bodyH, spec.dia, 0, bodyCenterY, 0, spec.bodyColor, spec.bodyMat)
+	body.CanCollide = collideBody == true
+
+	-- Полоса команды + неоновые кольца прокачанных версий
+	cyl("Stripe", 2.0, spec.dia * 1.04, 0, bodyCenterY + spec.bodyH * 0.18, 0, accent, Enum.Material.SmoothPlastic)
+	for r = 1, (spec.rings or 0) do
+		cyl("Ring_" .. r, 0.7, spec.dia * 1.06, 0, 3.4 + spec.bodyH * r / (spec.rings + 1), 0, spec.dark and teamColor or accent, Enum.Material.Neon)
+	end
+
+	-- Иллюминатор (смотрит по локальному +Z)
+	local window = newPart("Window", Vector3.new(0.5 * s, 1.6 * s, 1.6 * s), baseCF * CFrame.new(0, (bodyCenterY + spec.bodyH * 0.32) * s, (spec.dia / 2 + 0.05) * s) * CFrame.Angles(0, math.rad(90), 0), Color3.fromRGB(125, 214, 238), Enum.Material.Glass)
+	window.Shape = Enum.PartType.Cylinder
+
+	-- Конусообразный нос из сужающихся секций + шпиль
+	local noseBottom = 3.4 + spec.bodyH
+	local noseSegs = 5
+	for i = 1, noseSegs do
+		local d = spec.dia * (1 - (i / noseSegs) * 0.82)
+		local segH = spec.noseH / noseSegs
+		cyl("Nose_" .. i, segH, math.max(d, 0.6), 0, noseBottom + (i - 0.5) * segH, 0, accent, Enum.Material.SmoothPlastic)
+	end
+	local tipY = noseBottom + spec.noseH
+	local tip = newPart("Tip", Vector3.new(0.5 * s, 2.2 * s, 0.5 * s), baseCF * CFrame.new(0, (tipY + 0.9) * s, 0), Color3.fromRGB(226, 228, 232), Enum.Material.Metal)
+	table.insert(parts, tip)
+
+	-- Неоновое гало флагмана
+	if spec.halo then
+		local halo = cyl("Halo", 0.4, spec.dia + 3, 0, tipY - 1, 0, accent, Enum.Material.Neon)
+		halo.Transparency = 0.3
+	end
+
+	-- Боковые ускорители
+	if (spec.boosters or 0) > 0 then
+		local boosterD = spec.dia * 0.36
+		local boosterH = spec.bodyH * 0.55
+		for i = 1, spec.boosters do
+			local a = math.rad(360 / spec.boosters * i + 90)
+			local bx = math.cos(a) * (spec.dia / 2 + boosterD / 2 + 0.1)
+			local bz = math.sin(a) * (spec.dia / 2 + boosterD / 2 + 0.1)
+			cyl("Booster_" .. i, boosterH, boosterD, bx, 2.0 + boosterH / 2, bz, spec.bodyColor, spec.bodyMat)
+			cyl("BoosterNose_" .. i, 1.4, boosterD * 0.55, bx, 2.0 + boosterH + 0.7, bz, accent, Enum.Material.SmoothPlastic)
+		end
+	end
+
+	-- Стабилизаторы
+	for i = 1, 4 do
+		local a = math.rad(i * 90 + 45)
+		local dist = spec.dia / 2 + 0.9
+		local fin = Instance.new("WedgePart")
+		fin.Name = "Fin_" .. i
+		fin.Anchored = true
+		fin.CanCollide = false
+		fin.Size = Vector3.new(0.7 * s, spec.finH * s, 3.6 * s)
+		fin.CFrame = baseCF * CFrame.new(math.cos(a) * dist * s, (spec.finH / 2 + 0.4) * s, math.sin(a) * dist * s) * CFrame.Angles(0, -a + math.rad(90), 0)
+		fin.Color = accent
+		fin.Material = Enum.Material.SmoothPlastic
+		fin.TopSurface = Enum.SurfaceType.Smooth
+		fin.BottomSurface = Enum.SurfaceType.Smooth
+		fin.Parent = model
+		table.insert(parts, fin)
+	end
+
+	return parts, window, RocketFactory.GetHeight(mark, s)
+end
+
+return RocketFactory
+]]></string>
+        </Properties>
+      </Item>
+      <Item class="ModuleScript" referent="16">
+        <Properties>
           <string name="Name">RocketManager</string>
           <string name="Source"><![CDATA[-- RocketManager.luau - launcher purchases, upgrades, reloads, and authoritative combat
 --
@@ -1963,20 +2082,34 @@ local Remotes           = require(sharedFolder:WaitForChild("Remotes"))
 local DataManager       = require(script.Parent:WaitForChild("DataManager"))
 local PlotManager       = require(script.Parent:WaitForChild("PlotManager"))
 local FarmManager       = require(script.Parent:WaitForChild("FarmManager"))
+local RocketFactory     = require(script.Parent:WaitForChild("RocketFactory"))
 
 local RocketManager = {}
 
 local launcherReady = {}
 local lastRequest = {}
-local padDebounce = {}
 
--- Акцентные цвета летящей ракеты по поколениям (Mark I..IV).
-local FLY_ACCENTS = {
-	Color3.fromRGB(220, 70, 60),
-	Color3.fromRGB(255, 150, 50),
-	Color3.fromRGB(160, 90, 255),
-	Color3.fromRGB(255, 205, 70),
-}
+-- Анти-двойное срабатывание зелёных кругов: после покупки/прокачки игрок обязан
+-- СОЙТИ с круга, прежде чем тот сработает снова (фикс «стоит 410, списалось ~700»).
+local padLock = {} -- [key] = { player, pos, radius }
+
+task.spawn(function()
+	while true do
+		task.wait(0.25)
+		for key, rec in pairs(padLock) do
+			local char = rec.player and rec.player.Character
+			local hrp = char and char:FindFirstChild("HumanoidRootPart")
+			if not rec.player.Parent or not hrp then
+				padLock[key] = nil
+			else
+				local flat = Vector3.new(hrp.Position.X - rec.pos.X, 0, hrp.Position.Z - rec.pos.Z)
+				if flat.Magnitude > rec.radius then
+					padLock[key] = nil
+				end
+			end
+		end
+	end
+end)
 
 local function notify(player, message, kind)
 	Remotes.Get("Notify"):FireClient(player, message, kind or "info")
@@ -2002,13 +2135,12 @@ local function nearOwnLauncher(player)
 	return false
 end
 
--- Летящая ракета строится СЕРВЕРОМ (реплицируется всем): корень (нос по -Z),
--- корпус, конусный нос, полоса, стабилизаторы и дымный след. Масштаб и акцентный
--- цвет зависят от поколения стенда. Урон/прилёт — тоже на сервере.
-local function buildFlyingRocket(originPos, mark)
-	local scale = 1 + 0.18 * ((mark or 1) - 1)
-	local accent = FLY_ACCENTS[mark or 1] or FLY_ACCENTS[1]
+-- Летящая ракета строится СЕРВЕРОМ (реплицируется всем) из ТОГО ЖЕ конструктора,
+-- что и стенд на базе (RocketFactory): то же поколение Mark, тот же цвет команды,
+-- те же детали — в полёте ракета выглядит точно как на базе (масштаб 0.5, нос по -Z).
+local FLY_SCALE = 0.5
 
+local function buildFlyingRocket(originPos, mark, teamColor)
 	local model = Instance.new("Model")
 	model.Name = "FlyingRocket"
 
@@ -2022,49 +2154,22 @@ local function buildFlyingRocket(originPos, mark)
 	root.Parent = model
 	model.PrimaryPart = root
 
-	local function piece(name, size, localCF, color, material, shape)
-		local part = Instance.new("Part")
-		part.Name = name
-		part.Size = size
-		part.CFrame = root.CFrame * localCF
-		part.Color = color
-		part.Material = material
-		part.Anchored = true
-		part.CanCollide = false
-		if shape then part.Shape = shape end
-		part.Parent = model
-		return part
-	end
-
-	piece("Body", Vector3.new(6 * scale, 1.8 * scale, 1.8 * scale), CFrame.Angles(0, math.rad(90), 0), Color3.fromRGB(232, 236, 238), Enum.Material.SmoothPlastic, Enum.PartType.Cylinder)
-	piece("Stripe", Vector3.new(1.2 * scale, 1.85 * scale, 1.85 * scale), CFrame.new(0, 0, 0.6 * scale) * CFrame.Angles(0, math.rad(90), 0), accent, Enum.Material.SmoothPlastic, Enum.PartType.Cylinder)
-	for i = 1, 3 do
-		local d = 1.8 * scale * (1 - i * 0.28)
-		piece("Nose_" .. i, Vector3.new(0.9 * scale, math.max(d, 0.3), math.max(d, 0.3)), CFrame.new(0, 0, (-3 - (i - 0.5) * 0.9) * scale) * CFrame.Angles(0, math.rad(90), 0), accent, Enum.Material.SmoothPlastic, Enum.PartType.Cylinder)
-	end
-	for i = 1, 3 do
-		local a = math.rad(i * 120)
-		local fin = Instance.new("WedgePart")
-		fin.Name = "Fin_" .. i
-		fin.Size = Vector3.new(0.3 * scale, 1.6 * scale, 1.6 * scale)
-		fin.Color = accent
-		fin.Material = Enum.Material.SmoothPlastic
-		fin.Anchored = true
-		fin.CanCollide = false
-		fin.CFrame = root.CFrame * CFrame.new(math.cos(a) * 1.1 * scale, math.sin(a) * 1.1 * scale, 2.4 * scale) * CFrame.Angles(0, 0, a)
-		fin.Parent = model
-	end
+	-- Ось ракеты (+Y конструктора) разворачиваем в -Z корня (нос вперёд),
+	-- центр корпуса совмещаем с корнем.
+	local height = RocketFactory.GetHeight(mark, FLY_SCALE)
+	local baseCF = root.CFrame * CFrame.Angles(math.rad(-90), 0, 0) * CFrame.new(0, -height / 2, 0)
+	RocketFactory.Build(model, baseCF, teamColor, mark, FLY_SCALE, false)
 
 	local front = Instance.new("Attachment")
-	front.Position = Vector3.new(0, 0, -2 * scale)
+	front.Position = Vector3.new(0, 0, -height * 0.55)
 	front.Parent = root
 	local back = Instance.new("Attachment")
-	back.Position = Vector3.new(0, 0, 3 * scale)
+	back.Position = Vector3.new(0, 0, height * 0.5)
 	back.Parent = root
 	local trail = Instance.new("Trail")
 	trail.Attachment0 = front
 	trail.Attachment1 = back
-	trail.Color = ColorSequence.new(Color3.fromRGB(255, 205, 70), accent)
+	trail.Color = ColorSequence.new(Color3.fromRGB(255, 205, 70), teamColor)
 	trail.Lifetime = 0.35
 	trail.MinLength = 0.4
 	trail.Parent = root
@@ -2072,7 +2177,7 @@ local function buildFlyingRocket(originPos, mark)
 	local light = Instance.new("PointLight")
 	light.Brightness = 8
 	light.Range = 20
-	light.Color = accent
+	light.Color = Color3.fromRGB(255, 150, 50)
 	light.Parent = root
 
 	return model
@@ -2086,8 +2191,8 @@ end
 
 -- Спавнит ракету, ведёт её по баллистической дуге на сервере, просит клиента
 -- стрелка вести камеру за этим инстансом, затем вызывает onImpact в точке удара.
-local function flyRocket(shooter, originPos, targetPos, mark, onImpact)
-	local model = buildFlyingRocket(originPos, mark)
+local function flyRocket(shooter, originPos, targetPos, mark, teamColor, onImpact)
+	local model = buildFlyingRocket(originPos, mark, teamColor)
 	model.Parent = workspace
 
 	-- Клиенту-стрелку сообщаем, какую ракету вести камерой.
@@ -2249,16 +2354,16 @@ function RocketManager.Init()
 	end)
 	for _, player in ipairs(Players:GetPlayers()) do setupPlayer(player) end
 
-	-- Наступание на зелёные круги стендов (все острова, проверка владельца + дебаунс).
+	-- Наступание на зелёные круги стендов: ровно ОДИН раз за визит (надо сойти
+	-- с круга, чтобы он сработал снова) — никаких двойных списаний.
 	for plotId, plot in pairs(PlotManager.GetAllPlots()) do
 		for index, rp in pairs(plot.rocketPads or {}) do
 			rp.pad.Touched:Connect(function(hit)
 				local player = Players:GetPlayerFromCharacter(hit.Parent)
 				if not player or plot.owner ~= player then return end
 				local key = string.format("%d:%d:%d", player.UserId, plotId, index)
-				local now = os.clock()
-				if padDebounce[key] and now - padDebounce[key] < 1 then return end
-				padDebounce[key] = now
+				if padLock[key] then return end
+				padLock[key] = { player = player, pos = rp.pad.Position, radius = 8 }
 				onPadStep(player, index)
 			end)
 		end
@@ -2309,6 +2414,8 @@ function RocketManager.Init()
 		local level = DataManager.GetLauncherLevel(player, launcherIndex)
 		local damage = Config.RocketDamageForLevel(level)
 		local mark = Config.RocketMark(level)
+		local _, myPlot = PlotManager.GetPlotByPlayer(player)
+		local teamColor = myPlot and myPlot.themeColor or Color3.fromRGB(220, 70, 60)
 
 		-- Точка удара: либо переданная клиентом точка (ограниченная областью острова,
 		-- чтобы нельзя было целиться мимо карты), либо центр острова со случайным разбросом.
@@ -2323,7 +2430,7 @@ function RocketManager.Init()
 			impactPos = targetPlot.center + Vector3.new((math.random() - 0.5) * 30, 10, (math.random() - 0.5) * 30)
 		end
 
-		flyRocket(player, originPos, impactPos, mark, function()
+		flyRocket(player, originPos, impactPos, mark, teamColor, function()
 			-- Авторитетный прилёт: урон/оглушение зданий считает сервер.
 			local destroyed = FarmManager.ApplyRocketImpact(targetPlotId, impactPos, damage)
 			Remotes.Get("RocketImpact"):FireAllClients({
@@ -2343,21 +2450,21 @@ return RocketManager
       </Item>
     </Item>
   </Item>
-  <Item class="SoundService" referent="16">
+  <Item class="SoundService" referent="17">
     <Properties>
       <string name="Name">SoundService</string>
       <bool name="RespectFilteringEnabled">true</bool>
     </Properties>
   </Item>
-  <Item class="StarterPlayer" referent="17">
+  <Item class="StarterPlayer" referent="18">
     <Properties>
       <string name="Name">StarterPlayer</string>
     </Properties>
-    <Item class="StarterPlayerScripts" referent="18">
+    <Item class="StarterPlayerScripts" referent="19">
       <Properties>
         <string name="Name">StarterPlayerScripts</string>
       </Properties>
-      <Item class="LocalScript" referent="19">
+      <Item class="LocalScript" referent="20">
         <Properties>
           <string name="Name">Client</string>
           <string name="Source"><![CDATA[-- init.client.luau - Rojo client entry point
@@ -2407,14 +2514,11 @@ rocketState.OnClientEvent:Connect(function(data)
 	HudManager.UpdateRocketState(data)
 end)
 
+-- Текстовых уведомлений больше нет: ошибки — красная вспышка денежного счётчика,
+-- успехи — зелёная (сама сумма и так анимируется при изменении).
 local notify = Remotes.Get("Notify")
-notify.OnClientEvent:Connect(function(message, kind)
-	local colors = {
-		success = Color3.fromRGB(98, 220, 144),
-		error = Color3.fromRGB(239, 117, 91),
-		info = Color3.fromRGB(235, 239, 241),
-	}
-	HudManager.ShowNotification(message, colors[kind] or colors.info)
+notify.OnClientEvent:Connect(function(_message, kind)
+	HudManager.FlashFeedback(kind)
 end)
 
 local spawnIncomeFX = Remotes.Get("SpawnIncomeFX")
@@ -2425,12 +2529,15 @@ end)
 print("[Client] Rocket Islands client connected")
 ]]></string>
         </Properties>
-        <Item class="ModuleScript" referent="20">
+        <Item class="ModuleScript" referent="21">
           <Properties>
             <string name="Name">HudManager</string>
-            <string name="Source"><![CDATA[-- HudManager.luau — деньги (внизу по центру), уведомления и сценарий ракетного удара.
+            <string name="Source"><![CDATA[-- HudManager.luau — деньги (внизу по центру), настройки (⚙ справа снизу)
+-- и сценарий ракетного удара. НИКАКИХ текстовых плашек по центру экрана:
+-- ошибки показываются красной вспышкой денежного счётчика, подсказки прицела —
+-- одной строкой под верхней плашкой во время прицеливания.
 --
--- Сценарий запуска (v3, без бокового меню):
+-- Сценарий запуска (без бокового меню):
 --   1. Игрок подходит к своей установке и удерживает E (ProximityPrompt).
 --   2. Камера СРАЗУ переносится к первому вражескому острову.
 --   3. A / D (или стрелки ◀ ▶ сверху, между ними — ник владельца) листают острова.
@@ -2455,12 +2562,15 @@ local HudManager = {}
 
 local animEnabled = true
 local rocketReady = Config.START_LAUNCHERS
-local notifFrame, notifLabel, notifThread
 
 -- Деньги (нижняя панель)
-local moneyText, moneyLogoScale
+local moneyText, moneyStroke, moneyLogoScale
 local shownMoney = 0
-local moneyThread
+local moneyThread, moneyPopTween
+local flashToken = 0
+
+-- Настройки (шестерёнка)
+local settingsPanel, animToggleBtn
 
 -- Состояние сценария прицеливания.
 local topBar, ownerLabel, islandLabel, hintLabel, launchButton
@@ -2477,6 +2587,9 @@ local savedJumpPower, savedJumpHeight
 -- Сохранённое состояние камеры для восстановления после прицеливания.
 local cameraFocused = false
 local savedCameraType, savedCameraSubject
+
+local GOLD_TEXT = Color3.fromRGB(255, 227, 125)
+local GOLD_STROKE = Color3.fromRGB(255, 214, 90)
 
 local function makeFrame(parent, size, pos, color, alpha, name)
 	local f = Instance.new("Frame")
@@ -2525,15 +2638,38 @@ local function makeButton(parent, text, size, pos, bgColor, textColor)
 	return b
 end
 
-function HudManager.ShowNotification(text, color)
-	if notifLabel and notifFrame then
-		notifLabel.Text = text
-		notifLabel.TextColor3 = color or Color3.fromRGB(255, 255, 255)
-		notifFrame.Visible = true
-		if notifThread then task.cancel(notifThread) end
-		notifThread = task.delay(4.5, function()
-			if notifFrame then notifFrame.Visible = false end
-		end)
+-- Вспышка денежного счётчика вместо текстовых уведомлений: красная — ошибка
+-- (не хватает денег и т.п.), зелёная — успех. Никаких плашек по центру экрана.
+function HudManager.FlashFeedback(kind)
+	if not moneyText then return end
+	flashToken += 1
+	local token = flashToken
+	local color = kind == "error" and Color3.fromRGB(255, 90, 80) or Color3.fromRGB(120, 235, 150)
+	moneyText.TextColor3 = color
+	if moneyStroke then
+		moneyStroke.Color = color
+		moneyStroke.Transparency = 0.2
+	end
+	task.delay(0.5, function()
+		if flashToken ~= token then return end
+		if moneyText then moneyText.TextColor3 = GOLD_TEXT end
+		if moneyStroke then
+			moneyStroke.Color = GOLD_STROKE
+			moneyStroke.Transparency = 0.72
+		end
+	end)
+end
+
+-- Совместимость со старым API: текстовых уведомлений больше нет.
+function HudManager.ShowNotification(_text, _color)
+	HudManager.FlashFeedback("error")
+end
+
+-- Подсказка прицела (видна только во время прицеливания, под верхней плашкой).
+local function setHint(text, color)
+	if hintLabel and hintLabel.Visible then
+		hintLabel.Text = text
+		hintLabel.TextColor3 = color or Color3.fromRGB(255, 214, 90)
 	end
 end
 
@@ -2729,7 +2865,7 @@ function HudManager.OpenTargeting()
 	if player:GetAttribute("PlotId") == nil then return end
 	targets = collectTargets()
 	if #targets == 0 then
-		HudManager.ShowNotification("Нет доступных целей", Color3.fromRGB(255, 180, 40))
+		HudManager.FlashFeedback("error")
 		return
 	end
 	targetingActive = true
@@ -2749,11 +2885,12 @@ local function doLaunch()
 	local entry = targets[targetIndex]
 	if not entry then return end
 	if not aimPos then
-		HudManager.ShowNotification("Сначала выберите точку удара", Color3.fromRGB(255, 180, 40))
+		setHint("Сначала выберите точку удара — кликните по острову", Color3.fromRGB(255, 180, 40))
 		return
 	end
 	if rocketReady <= 0 then
-		HudManager.ShowNotification("Все ракеты перезаряжаются", Color3.fromRGB(239, 117, 91))
+		setHint("Все ракеты перезаряжаются", Color3.fromRGB(255, 110, 95))
+		HudManager.FlashFeedback("error")
 		return
 	end
 	local plotId, pos = entry.plotId, aimPos
@@ -2776,16 +2913,13 @@ local function onWorldClick(input, gpe)
 	if not part then return end
 	local plotId = findClickedPlot(part)
 	if plotId ~= entry.plotId then
-		HudManager.ShowNotification("Кликните по выбранному острову", Color3.fromRGB(255, 180, 40))
+		setHint("Кликните по выбранному острову", Color3.fromRGB(255, 180, 40))
 		return
 	end
 	aimPos = mouse.Hit.Position
 	showMarker(aimPos)
 	setLaunchEnabled(true)
-	if hintLabel then
-		hintLabel.Text = "Точка удара выбрана — жмите ЗАПУСК"
-		hintLabel.TextColor3 = Color3.fromRGB(98, 220, 144)
-	end
+	setHint("Точка удара выбрана — жмите ЗАПУСК", Color3.fromRGB(98, 220, 144))
 end
 
 -- Создаёт ProximityPrompt на КАЖДОЙ своей установке.
@@ -2841,27 +2975,22 @@ function HudManager.Init(initAnimEnabled)
 	screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Global
 	screenGui.Parent = playerGui
 
-	-- Уведомления (верх, по центру)
-	notifFrame = makeFrame(screenGui, UDim2.new(0, 360, 0, 50), UDim2.new(0.5, -180, 0, 96), Color3.fromRGB(20, 20, 25), 0.1, "NotifFrame")
-	notifFrame.ZIndex = 20
-	notifFrame.Visible = false
-
-	notifLabel = makeLabel(notifFrame, "", UDim2.new(1, -10, 1, 0), UDim2.new(0, 5, 0, 0), Color3.fromRGB(255, 255, 255), 14, Enum.Font.GothamBold)
-	notifLabel.TextXAlignment = Enum.TextXAlignment.Center
-
 	-- === Деньги: внизу, горизонтально по центру, слева круглый логотип бакса ===
 	local moneyBar = makeFrame(screenGui, UDim2.new(0, 230, 0, 56), UDim2.new(0.5, -115, 1, -72), Color3.fromRGB(14, 18, 24), 0.08, "MoneyBar")
 	moneyBar:FindFirstChildOfClass("UICorner").CornerRadius = UDim.new(0, 28)
-	local moneyStroke = Instance.new("UIStroke")
-	moneyStroke.Color = Color3.fromRGB(255, 214, 90)
+	moneyStroke = Instance.new("UIStroke")
+	moneyStroke.Color = GOLD_STROKE
 	moneyStroke.Transparency = 0.72
 	moneyStroke.Thickness = 1.4
 	moneyStroke.Parent = moneyBar
 
+	-- Якорь по центру: масштабирование «пульса» идёт от центра, логотип всегда
+	-- отцентрован по вертикали (раньше при прокачке он «уезжал» вниз).
 	local logo = Instance.new("Frame")
 	logo.Name = "DollarLogo"
+	logo.AnchorPoint = Vector2.new(0.5, 0.5)
 	logo.Size = UDim2.new(0, 40, 0, 40)
-	logo.Position = UDim2.new(0, 8, 0.5, -20)
+	logo.Position = UDim2.new(0, 28, 0.5, 0)
 	logo.BackgroundColor3 = Color3.fromRGB(52, 206, 118)
 	logo.BorderSizePixel = 0
 	logo.Parent = moneyBar
@@ -2874,9 +3003,37 @@ function HudManager.Init(initAnimEnabled)
 	local dollar = makeLabel(logo, "$", UDim2.new(1, 0, 1, 0), UDim2.new(), Color3.fromRGB(255, 255, 255), 24, Enum.Font.GothamBlack)
 	dollar.TextXAlignment = Enum.TextXAlignment.Center
 
-	moneyText = makeLabel(moneyBar, "0", UDim2.new(1, -66, 1, 0), UDim2.new(0, 58, 0, 0), Color3.fromRGB(255, 227, 125), 22, Enum.Font.GothamBold)
+	moneyText = makeLabel(moneyBar, "0", UDim2.new(1, -66, 1, 0), UDim2.new(0, 58, 0, 0), GOLD_TEXT, 22, Enum.Font.GothamBold)
 	moneyText.TextXAlignment = Enum.TextXAlignment.Left
 	moneyText.TextYAlignment = Enum.TextYAlignment.Center
+
+	-- === Шестерёнка настроек (правый нижний угол) ===
+	local gearBtn = makeButton(screenGui, "⚙️", UDim2.new(0, 46, 0, 46), UDim2.new(1, -58, 1, -58), Color3.fromRGB(22, 28, 36))
+	gearBtn:FindFirstChildOfClass("UICorner").CornerRadius = UDim.new(1, 0)
+	gearBtn.TextSize = 22
+
+	settingsPanel = makeFrame(screenGui, UDim2.new(0, 264, 0, 64), UDim2.new(1, -276, 1, -130), Color3.fromRGB(14, 18, 24), 0.06, "SettingsPanel")
+	settingsPanel:FindFirstChildOfClass("UICorner").CornerRadius = UDim.new(0, 14)
+	settingsPanel.Visible = false
+
+	makeLabel(settingsPanel, "Анимация полёта ракеты", UDim2.new(1, -102, 1, 0), UDim2.new(0, 14, 0, 0), Color3.fromRGB(218, 226, 232), 14)
+
+	animToggleBtn = makeButton(settingsPanel, "ВКЛ", UDim2.new(0, 74, 0, 34), UDim2.new(1, -84, 0.5, -17), Color3.fromRGB(52, 190, 110))
+	local function refreshToggle()
+		animToggleBtn.Text = animEnabled and "ВКЛ" or "ВЫКЛ"
+		animToggleBtn.BackgroundColor3 = animEnabled and Color3.fromRGB(52, 190, 110) or Color3.fromRGB(90, 98, 108)
+	end
+	refreshToggle()
+
+	gearBtn.MouseButton1Click:Connect(function()
+		settingsPanel.Visible = not settingsPanel.Visible
+	end)
+	animToggleBtn.MouseButton1Click:Connect(function()
+		animEnabled = not animEnabled
+		refreshToggle()
+		-- Сохраняется НАВСЕГДА (DataStore на сервере, см. DataManager).
+		Remotes.Get("SetAnimSetting"):FireServer(animEnabled)
+	end)
 
 	-- === Верхняя плашка прицеливания: ◀ [ник] ▶ и ✕ ===
 	topBar = makeFrame(screenGui, UDim2.new(0, 460, 0, 68), UDim2.new(0.5, -230, 0, 14), Color3.fromRGB(14, 18, 24), 0.12, "TargetBar")
@@ -2974,8 +3131,8 @@ function HudManager.Init(initAnimEnabled)
 		while true do
 			ensurePrompts()
 			if targetingActive and not targetingStillValid() then
-				HudManager.ShowNotification("Ракетная установка недоступна", Color3.fromRGB(239, 117, 91))
 				HudManager.CloseTargeting()
+				HudManager.FlashFeedback("error")
 			end
 			task.wait(1)
 		end
@@ -2990,8 +3147,12 @@ function HudManager.UpdateData(data)
 	if moneyThread then task.cancel(moneyThread) end
 	local from = shownMoney
 	if from ~= target and moneyLogoScale then
-		local pop = TweenService:Create(moneyLogoScale, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out, 0, true), { Scale = 1.18 })
-		pop:Play()
+		-- Гасим предыдущий пульс и сбрасываем масштаб: незавершённый твин
+		-- оставлял Scale > 1 и логотип «уезжал» из центра.
+		if moneyPopTween then moneyPopTween:Cancel() end
+		moneyLogoScale.Scale = 1
+		moneyPopTween = TweenService:Create(moneyLogoScale, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out, 0, true), { Scale = 1.15 })
+		moneyPopTween:Play()
 	end
 	moneyThread = task.spawn(function()
 		local t0 = os.clock()
@@ -3019,40 +3180,74 @@ return HudManager
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="21">
+        <Item class="ModuleScript" referent="22">
           <Properties>
             <string name="Name">PriceTags</string>
-            <string name="Source"><![CDATA[-- PriceTags.luau - ценники (BillboardGui "PriceTag") видны ТОЛЬКО на своём острове.
--- Сервер выставляет на ценнике атрибут Unlocked (открыт ли слот) и держит его
--- Enabled = false для всех. Клиент включает Enabled лишь для ценников своего плота.
+            <string name="Source"><![CDATA[-- PriceTags.luau — ценники (BillboardGui "PriceTag") видны ТОЛЬКО на своём острове
+-- и ТОЛЬКО когда игрок стоит рядом с кнопкой (меньше текста на экране: подошёл —
+-- цена появилась, отошёл — исчезла). Сервер выставляет атрибут Unlocked и держит
+-- Enabled = false для всех; клиент включает Enabled по владению + дистанции.
 local Players = game:GetService("Players")
 
 local player = Players.LocalPlayer
 
 local PriceTags = {}
 
-local function refresh()
-	local myId = player:GetAttribute("PlotId")
+local SHOW_DISTANCE = 22
+
+-- Кэш ценников: { gui, part, plotId }. Пересобираем редко, дистанцию чекаем часто.
+local cache = {}
+
+local function rebuildCache()
+	local found = {}
 	for _, folder in ipairs(workspace:GetChildren()) do
 		local pid = folder:GetAttribute("PlotId")
 		if pid ~= nil then
-			local mine = (myId ~= nil and pid == myId)
 			for _, gui in ipairs(folder:GetDescendants()) do
 				if gui:IsA("BillboardGui") and gui.Name == "PriceTag" then
-					gui.Enabled = mine and (gui:GetAttribute("Unlocked") == true)
+					local part = gui.Parent
+					if part and part:IsA("BasePart") then
+						table.insert(found, { gui = gui, part = part, plotId = pid })
+					end
 				end
 			end
+		end
+	end
+	cache = found
+end
+
+local function refresh()
+	local myId = player:GetAttribute("PlotId")
+	local char = player.Character
+	local hrp = char and char:FindFirstChild("HumanoidRootPart")
+	for _, entry in ipairs(cache) do
+		if entry.gui.Parent then
+			local show = false
+			if myId ~= nil and entry.plotId == myId and hrp and entry.gui:GetAttribute("Unlocked") == true then
+				show = (entry.part.Position - hrp.Position).Magnitude < SHOW_DISTANCE
+			end
+			entry.gui.Enabled = show
 		end
 	end
 end
 
 function PriceTags.Init()
+	rebuildCache()
 	player:GetAttributeChangedSignal("PlotId"):Connect(refresh)
-	-- Регулярно обновляем: атрибуты реплицируются, новые ценники появляются при покупке.
+
+	-- Новые ценники появляются при покупках — кэш пересобираем раз в 2с.
+	task.spawn(function()
+		while true do
+			task.wait(2)
+			rebuildCache()
+		end
+	end)
+
+	-- Дистанцию проверяем часто — ценник «зажигается», когда подходишь вплотную.
 	task.spawn(function()
 		while true do
 			refresh()
-			task.wait(1)
+			task.wait(0.15)
 		end
 	end)
 end
@@ -3061,13 +3256,16 @@ return PriceTags
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="22">
+        <Item class="ModuleScript" referent="23">
           <Properties>
             <string name="Name">RocketAnim</string>
-            <string name="Source"><![CDATA[-- RocketAnim.luau - кинокамера стрелка следует за СЕРВЕРНОЙ ракетой; взрыв + звук при прилёте
+            <string name="Source"><![CDATA[-- RocketAnim.luau - кинокамера стрелка следует за СЕРВЕРНОЙ ракетой; взрыв с
+-- настоящим чёрным дымом при прилёте. ЛКМ во время полёта пропускает анимацию
+-- (камера сразу возвращается к персонажу, ракета долетает сама).
 local Players           = game:GetService("Players")
 local TweenService      = game:GetService("TweenService")
 local RunService        = game:GetService("RunService")
+local UserInputService  = game:GetService("UserInputService")
 local Debris            = game:GetService("Debris")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local sharedFolder      = ReplicatedStorage:WaitForChild("Shared", 10)
@@ -3078,8 +3276,10 @@ local player = Players.LocalPlayer
 
 local RocketAnim = {}
 
+local SMOKE_TEXTURE = "rbxassetid://241594419"
+
 local function spawnExplosion(pos)
-	-- Настоящий Explosion (без урона игрокам) + вспышка/кольцо/дым.
+	-- Настоящий Explosion (без урона игрокам) + вспышка и ударное кольцо.
 	local explosion = Instance.new("Explosion")
 	explosion.Position = pos
 	explosion.BlastRadius = 24
@@ -3129,33 +3329,73 @@ local function spawnExplosion(pos)
 	sound.Parent = ball
 	sound:Play()
 
-	for _ = 1, 8 do
-		task.spawn(function()
-			local smoke = Instance.new("Part")
-			smoke.Shape = Enum.PartType.Ball
-			smoke.Size = Vector3.new(3, 3, 3)
-			smoke.Position = pos + Vector3.new(
-				(math.random() - 0.5) * 10,
-				math.random() * 6,
-				(math.random() - 0.5) * 10
-			)
-			smoke.Anchored = true
-			smoke.CanCollide = false
-			smoke.Material = Enum.Material.SmoothPlastic
-			smoke.Color = Color3.fromRGB(60 + math.random(30), 60 + math.random(30), 65)
-			smoke.Parent = workspace
+	-- НАСТОЯЩИЙ чёрный дым: клубящиеся частицы вместо серых шаров-«кругов».
+	local smokeHolder = Instance.new("Part")
+	smokeHolder.Size = Vector3.new(1, 1, 1)
+	smokeHolder.Position = pos + Vector3.new(0, 2, 0)
+	smokeHolder.Anchored = true
+	smokeHolder.CanCollide = false
+	smokeHolder.Transparency = 1
+	smokeHolder.Parent = workspace
 
-			local st = TweenService:Create(smoke,
-				TweenInfo.new(0.9, Enum.EasingStyle.Quad),
-				{ Size = Vector3.new(9, 9, 9), Transparency = 1, Position = smoke.Position + Vector3.new(0, 10, 0) })
-			st:Play()
-			Debris:AddItem(smoke, 1)
-		end)
-	end
+	local smoke = Instance.new("ParticleEmitter")
+	smoke.Name = "ImpactSmoke"
+	smoke.Texture = SMOKE_TEXTURE
+	smoke.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, Color3.fromRGB(28, 28, 30)),
+		ColorSequenceKeypoint.new(0.5, Color3.fromRGB(52, 52, 55)),
+		ColorSequenceKeypoint.new(1, Color3.fromRGB(96, 96, 100)),
+	})
+	smoke.Size = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 5),
+		NumberSequenceKeypoint.new(0.35, 10),
+		NumberSequenceKeypoint.new(1, 16),
+	})
+	smoke.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0.12),
+		NumberSequenceKeypoint.new(0.6, 0.45),
+		NumberSequenceKeypoint.new(1, 1),
+	})
+	smoke.Lifetime = NumberRange.new(1.4, 2.6)
+	smoke.Speed = NumberRange.new(10, 20)
+	smoke.SpreadAngle = Vector2.new(85, 85)
+	smoke.Acceleration = Vector3.new(0, 7, 0)
+	smoke.Drag = 1.2
+	smoke.Rotation = NumberRange.new(-180, 180)
+	smoke.RotSpeed = NumberRange.new(-40, 40)
+	smoke.EmissionDirection = Enum.NormalId.Top
+	smoke.Rate = 0
+	smoke.Parent = smokeHolder
+
+	-- Короткая огненная вспышка внутри дыма.
+	local fire = Instance.new("ParticleEmitter")
+	fire.Name = "ImpactFire"
+	fire.Texture = SMOKE_TEXTURE
+	fire.Color = ColorSequence.new(Color3.fromRGB(255, 150, 40), Color3.fromRGB(200, 60, 20))
+	fire.LightEmission = 0.9
+	fire.Size = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 3),
+		NumberSequenceKeypoint.new(1, 7),
+	})
+	fire.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0.1),
+		NumberSequenceKeypoint.new(1, 1),
+	})
+	fire.Lifetime = NumberRange.new(0.3, 0.6)
+	fire.Speed = NumberRange.new(14, 26)
+	fire.SpreadAngle = Vector2.new(70, 70)
+	fire.EmissionDirection = Enum.NormalId.Top
+	fire.Rate = 0
+	fire.Parent = smokeHolder
+
+	smoke:Emit(45)
+	fire:Emit(25)
+	Debris:AddItem(smokeHolder, 4.5)
 end
 
 -- Камера стрелка ведёт СЕРВЕРНУЮ ракету (её инстанс приходит по RocketFollow),
 -- пока сервер её не уничтожит; затем плавно возвращает управление игроку.
+-- Клик ЛКМ (или тап) в любой момент ПРОПУСКАЕТ анимацию: камера сразу к игроку.
 function RocketAnim.Follow(rocketModel, animEnabled)
 	if not animEnabled then return end
 	if typeof(rocketModel) ~= "Instance" then return end
@@ -3169,17 +3409,34 @@ function RocketAnim.Follow(rocketModel, animEnabled)
 	camera.CameraType = Enum.CameraType.Scriptable
 
 	task.spawn(function()
+		local skipped = false
+		local skipConn = UserInputService.InputBegan:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+				skipped = true
+			end
+		end)
+
 		local lastPos = root.Position
 		local startT = os.clock()
-		while rocketModel.Parent and root.Parent and (os.clock() - startT) < (Config.ROCKET_ANIM_TIME + 3) do
+		-- Летящая ракета крупнее прежней — камера чуть дальше и выше.
+		while rocketModel.Parent and root.Parent and not skipped and (os.clock() - startT) < (Config.ROCKET_ANIM_TIME + 3) do
 			local pos = root.Position
 			local look = root.CFrame.LookVector
 			if look.Magnitude < 0.001 then look = Vector3.new(0, 0, -1) end
 			local side = look:Cross(Vector3.new(0, 1, 0))
-			local camPos = pos - look * 24 + Vector3.new(0, 10, 0) + side * 6
+			local camPos = pos - look * 30 + Vector3.new(0, 12, 0) + side * 7
 			camera.CFrame = CFrame.lookAt(camPos, pos + look * 6)
 			lastPos = pos
 			RunService.RenderStepped:Wait()
+		end
+
+		skipConn:Disconnect()
+
+		if skipped then
+			-- Пропуск: мгновенно возвращаем обычную камеру (ракета долетит сама).
+			camera.CameraType = prevType or Enum.CameraType.Custom
+			if prevSubject then camera.CameraSubject = prevSubject end
+			return
 		end
 
 		-- Вид сверху на точку взрыва, затем плавный возврат к персонажу.
@@ -3203,28 +3460,17 @@ function RocketAnim.Follow(rocketModel, animEnabled)
 	end)
 end
 
--- Прилёт: взрыв + звук в точке удара и уведомление о результате.
+-- Прилёт: взрыв + дым + звук в точке удара (без текстовых уведомлений).
 function RocketAnim.Impact(data)
 	if not data or not data.pos then return end
 	spawnExplosion(data.pos)
-
-	local msg
-	if data.destroyed then
-		msg = string.format("%s уничтожил цель на острове %d", data.shooterName or "Игрок", data.targetPlotId or 0)
-	else
-		msg = string.format("%s атаковал остров %d", data.shooterName or "Игрок", data.targetPlotId or 0)
-	end
-	local ok, HudManager = pcall(require, script.Parent:WaitForChild("HudManager"))
-	if ok and HudManager then
-		HudManager.ShowNotification(msg, data.destroyed and Color3.fromRGB(255, 80, 80) or Color3.fromRGB(255, 180, 40))
-	end
 end
 
 return RocketAnim
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="23">
+        <Item class="ModuleScript" referent="24">
           <Properties>
             <string name="Name">Sprint</string>
             <string name="Source"><![CDATA[-- Sprint.luau — ускорение на Shift: персонаж бежит немного быстрее,
@@ -3294,7 +3540,7 @@ return Sprint
 ]]></string>
           </Properties>
         </Item>
-        <Item class="ModuleScript" referent="24">
+        <Item class="ModuleScript" referent="25">
           <Properties>
             <string name="Name">VisualFX</string>
             <string name="Source"><![CDATA[-- VisualFX.luau — Визуальные 3D эффекты: всплывающие деньги +$Cash над зданиями
@@ -3347,7 +3593,7 @@ return VisualFX
       </Item>
     </Item>
   </Item>
-  <Item class="Workspace" referent="25">
+  <Item class="Workspace" referent="26">
     <Properties>
       <string name="Name">Workspace</string>
       <bool name="FilteringEnabled">true</bool>

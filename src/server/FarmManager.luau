@@ -180,7 +180,6 @@ local function buildBuildingModel(plotId, slotIndex, tier, level, territoryFolde
 	local baseCF = CFrame.lookAt(slotCenter, Vector3.new(plot.center.X, slotCenter.Y, plot.center.Z))
 
 	local style = TIER_STYLES[tier]
-	local income = Config.IncomeForLevel(tier, level)
 	local home = Instance.new("Model")
 	home.Name = "IncomeHome_" .. slotIndex
 	home:SetAttribute("Alive", true)
@@ -307,23 +306,9 @@ local function buildBuildingModel(plotId, slotIndex, tier, level, territoryFolde
 		end
 	end
 
-	local gui = Instance.new("BillboardGui")
-	gui.Name = "StatusGui"
-	gui.Size = UDim2.new(0, 150, 0, 30)
-	gui.StudsOffset = Vector3.new(0, 6, 0)
-	gui.AlwaysOnTop = false
-	gui.Parent = roofCore
-	local statusLabel = Instance.new("TextLabel")
-	statusLabel.Size = UDim2.new(1, 0, 1, 0)
-	statusLabel.BackgroundTransparency = 1
-	statusLabel.Text = string.format("ур.%d  +$%d", level, income)
-	statusLabel.TextColor3 = Color3.fromRGB(129, 255, 161)
-	statusLabel.TextStrokeTransparency = 0.55
-	statusLabel.TextScaled = true
-	statusLabel.Font = Enum.Font.GothamBold
-	statusLabel.Parent = gui
-
-	return home, roofCore, nil, statusLabel
+	-- Статичной таблички «ур.N +$X» над зданием больше НЕТ (чистый экран):
+	-- прибыль видно по всплывающим «+$» (VisualFX), уровень — по этажам дома.
+	return home, roofCore, nil, nil
 end
 
 -- Обновляет ценник над кнопкой: покупка / прокачка до след. уровня / макс.
@@ -488,19 +473,40 @@ local function destroyBuilding(plotId, slotIndex)
 	end)
 end
 
-local buyDebounce = {}
+-- Анти-двойное списание: после срабатывания кнопки игрок обязан СОЙТИ с неё
+-- (отойти от центра дальше радиуса), прежде чем она сработает снова. Раньше,
+-- стоя на кнопке, Touched стрелял повторно каждую секунду — списывалось больше,
+-- чем показывал ценник (баг «стоит 410, списалось ~700»).
+local padLock = {} -- [key] = { player, pos, radius }
+
+task.spawn(function()
+	while true do
+		task.wait(0.25)
+		for key, rec in pairs(padLock) do
+			local char = rec.player and rec.player.Character
+			local hrp = char and char:FindFirstChild("HumanoidRootPart")
+			if not rec.player.Parent or not hrp then
+				padLock[key] = nil
+			else
+				local flat = Vector3.new(hrp.Position.X - rec.pos.X, 0, hrp.Position.Z - rec.pos.Z)
+				if flat.Magnitude > rec.radius then
+					padLock[key] = nil
+				end
+			end
+		end
+	end
+end)
 
 function FarmManager.Init()
 	for plotId, plot in pairs(PlotManager.GetAllPlots()) do
 		for slotIdx, slotInfo in ipairs(plot.slots) do
-			-- Покупка/прокачка по НАСТУПАНИЮ на кнопку (с дебаунсом ~1с и проверкой владельца).
+			-- Покупка/прокачка по НАСТУПАНИЮ на кнопку: ровно ОДИН раз за визит.
 			slotInfo.buyPad.Touched:Connect(function(hit)
 				local player = Players:GetPlayerFromCharacter(hit.Parent)
 				if not player or plot.owner ~= player then return end
 				local key = string.format("%d:%d:%d", player.UserId, plotId, slotIdx)
-				local now = os.clock()
-				if buyDebounce[key] and now - buyDebounce[key] < 1 then return end
-				buyDebounce[key] = now
+				if padLock[key] then return end
+				padLock[key] = { player = player, pos = slotInfo.buyPad.Position, radius = 7 }
 				FarmManager.BuyOrUpgrade(player, slotIdx)
 			end)
 		end

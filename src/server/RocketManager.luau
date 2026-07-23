@@ -13,20 +13,34 @@ local Remotes           = require(sharedFolder:WaitForChild("Remotes"))
 local DataManager       = require(script.Parent:WaitForChild("DataManager"))
 local PlotManager       = require(script.Parent:WaitForChild("PlotManager"))
 local FarmManager       = require(script.Parent:WaitForChild("FarmManager"))
+local RocketFactory     = require(script.Parent:WaitForChild("RocketFactory"))
 
 local RocketManager = {}
 
 local launcherReady = {}
 local lastRequest = {}
-local padDebounce = {}
 
--- Акцентные цвета летящей ракеты по поколениям (Mark I..IV).
-local FLY_ACCENTS = {
-	Color3.fromRGB(220, 70, 60),
-	Color3.fromRGB(255, 150, 50),
-	Color3.fromRGB(160, 90, 255),
-	Color3.fromRGB(255, 205, 70),
-}
+-- Анти-двойное срабатывание зелёных кругов: после покупки/прокачки игрок обязан
+-- СОЙТИ с круга, прежде чем тот сработает снова (фикс «стоит 410, списалось ~700»).
+local padLock = {} -- [key] = { player, pos, radius }
+
+task.spawn(function()
+	while true do
+		task.wait(0.25)
+		for key, rec in pairs(padLock) do
+			local char = rec.player and rec.player.Character
+			local hrp = char and char:FindFirstChild("HumanoidRootPart")
+			if not rec.player.Parent or not hrp then
+				padLock[key] = nil
+			else
+				local flat = Vector3.new(hrp.Position.X - rec.pos.X, 0, hrp.Position.Z - rec.pos.Z)
+				if flat.Magnitude > rec.radius then
+					padLock[key] = nil
+				end
+			end
+		end
+	end
+end)
 
 local function notify(player, message, kind)
 	Remotes.Get("Notify"):FireClient(player, message, kind or "info")
@@ -52,13 +66,12 @@ local function nearOwnLauncher(player)
 	return false
 end
 
--- Летящая ракета строится СЕРВЕРОМ (реплицируется всем): корень (нос по -Z),
--- корпус, конусный нос, полоса, стабилизаторы и дымный след. Масштаб и акцентный
--- цвет зависят от поколения стенда. Урон/прилёт — тоже на сервере.
-local function buildFlyingRocket(originPos, mark)
-	local scale = 1 + 0.18 * ((mark or 1) - 1)
-	local accent = FLY_ACCENTS[mark or 1] or FLY_ACCENTS[1]
+-- Летящая ракета строится СЕРВЕРОМ (реплицируется всем) из ТОГО ЖЕ конструктора,
+-- что и стенд на базе (RocketFactory): то же поколение Mark, тот же цвет команды,
+-- те же детали — в полёте ракета выглядит точно как на базе (масштаб 0.5, нос по -Z).
+local FLY_SCALE = 0.5
 
+local function buildFlyingRocket(originPos, mark, teamColor)
 	local model = Instance.new("Model")
 	model.Name = "FlyingRocket"
 
@@ -72,49 +85,22 @@ local function buildFlyingRocket(originPos, mark)
 	root.Parent = model
 	model.PrimaryPart = root
 
-	local function piece(name, size, localCF, color, material, shape)
-		local part = Instance.new("Part")
-		part.Name = name
-		part.Size = size
-		part.CFrame = root.CFrame * localCF
-		part.Color = color
-		part.Material = material
-		part.Anchored = true
-		part.CanCollide = false
-		if shape then part.Shape = shape end
-		part.Parent = model
-		return part
-	end
-
-	piece("Body", Vector3.new(6 * scale, 1.8 * scale, 1.8 * scale), CFrame.Angles(0, math.rad(90), 0), Color3.fromRGB(232, 236, 238), Enum.Material.SmoothPlastic, Enum.PartType.Cylinder)
-	piece("Stripe", Vector3.new(1.2 * scale, 1.85 * scale, 1.85 * scale), CFrame.new(0, 0, 0.6 * scale) * CFrame.Angles(0, math.rad(90), 0), accent, Enum.Material.SmoothPlastic, Enum.PartType.Cylinder)
-	for i = 1, 3 do
-		local d = 1.8 * scale * (1 - i * 0.28)
-		piece("Nose_" .. i, Vector3.new(0.9 * scale, math.max(d, 0.3), math.max(d, 0.3)), CFrame.new(0, 0, (-3 - (i - 0.5) * 0.9) * scale) * CFrame.Angles(0, math.rad(90), 0), accent, Enum.Material.SmoothPlastic, Enum.PartType.Cylinder)
-	end
-	for i = 1, 3 do
-		local a = math.rad(i * 120)
-		local fin = Instance.new("WedgePart")
-		fin.Name = "Fin_" .. i
-		fin.Size = Vector3.new(0.3 * scale, 1.6 * scale, 1.6 * scale)
-		fin.Color = accent
-		fin.Material = Enum.Material.SmoothPlastic
-		fin.Anchored = true
-		fin.CanCollide = false
-		fin.CFrame = root.CFrame * CFrame.new(math.cos(a) * 1.1 * scale, math.sin(a) * 1.1 * scale, 2.4 * scale) * CFrame.Angles(0, 0, a)
-		fin.Parent = model
-	end
+	-- Ось ракеты (+Y конструктора) разворачиваем в -Z корня (нос вперёд),
+	-- центр корпуса совмещаем с корнем.
+	local height = RocketFactory.GetHeight(mark, FLY_SCALE)
+	local baseCF = root.CFrame * CFrame.Angles(math.rad(-90), 0, 0) * CFrame.new(0, -height / 2, 0)
+	RocketFactory.Build(model, baseCF, teamColor, mark, FLY_SCALE, false)
 
 	local front = Instance.new("Attachment")
-	front.Position = Vector3.new(0, 0, -2 * scale)
+	front.Position = Vector3.new(0, 0, -height * 0.55)
 	front.Parent = root
 	local back = Instance.new("Attachment")
-	back.Position = Vector3.new(0, 0, 3 * scale)
+	back.Position = Vector3.new(0, 0, height * 0.5)
 	back.Parent = root
 	local trail = Instance.new("Trail")
 	trail.Attachment0 = front
 	trail.Attachment1 = back
-	trail.Color = ColorSequence.new(Color3.fromRGB(255, 205, 70), accent)
+	trail.Color = ColorSequence.new(Color3.fromRGB(255, 205, 70), teamColor)
 	trail.Lifetime = 0.35
 	trail.MinLength = 0.4
 	trail.Parent = root
@@ -122,7 +108,7 @@ local function buildFlyingRocket(originPos, mark)
 	local light = Instance.new("PointLight")
 	light.Brightness = 8
 	light.Range = 20
-	light.Color = accent
+	light.Color = Color3.fromRGB(255, 150, 50)
 	light.Parent = root
 
 	return model
@@ -136,8 +122,8 @@ end
 
 -- Спавнит ракету, ведёт её по баллистической дуге на сервере, просит клиента
 -- стрелка вести камеру за этим инстансом, затем вызывает onImpact в точке удара.
-local function flyRocket(shooter, originPos, targetPos, mark, onImpact)
-	local model = buildFlyingRocket(originPos, mark)
+local function flyRocket(shooter, originPos, targetPos, mark, teamColor, onImpact)
+	local model = buildFlyingRocket(originPos, mark, teamColor)
 	model.Parent = workspace
 
 	-- Клиенту-стрелку сообщаем, какую ракету вести камерой.
@@ -299,16 +285,16 @@ function RocketManager.Init()
 	end)
 	for _, player in ipairs(Players:GetPlayers()) do setupPlayer(player) end
 
-	-- Наступание на зелёные круги стендов (все острова, проверка владельца + дебаунс).
+	-- Наступание на зелёные круги стендов: ровно ОДИН раз за визит (надо сойти
+	-- с круга, чтобы он сработал снова) — никаких двойных списаний.
 	for plotId, plot in pairs(PlotManager.GetAllPlots()) do
 		for index, rp in pairs(plot.rocketPads or {}) do
 			rp.pad.Touched:Connect(function(hit)
 				local player = Players:GetPlayerFromCharacter(hit.Parent)
 				if not player or plot.owner ~= player then return end
 				local key = string.format("%d:%d:%d", player.UserId, plotId, index)
-				local now = os.clock()
-				if padDebounce[key] and now - padDebounce[key] < 1 then return end
-				padDebounce[key] = now
+				if padLock[key] then return end
+				padLock[key] = { player = player, pos = rp.pad.Position, radius = 8 }
 				onPadStep(player, index)
 			end)
 		end
@@ -359,6 +345,8 @@ function RocketManager.Init()
 		local level = DataManager.GetLauncherLevel(player, launcherIndex)
 		local damage = Config.RocketDamageForLevel(level)
 		local mark = Config.RocketMark(level)
+		local _, myPlot = PlotManager.GetPlotByPlayer(player)
+		local teamColor = myPlot and myPlot.themeColor or Color3.fromRGB(220, 70, 60)
 
 		-- Точка удара: либо переданная клиентом точка (ограниченная областью острова,
 		-- чтобы нельзя было целиться мимо карты), либо центр острова со случайным разбросом.
@@ -373,7 +361,7 @@ function RocketManager.Init()
 			impactPos = targetPlot.center + Vector3.new((math.random() - 0.5) * 30, 10, (math.random() - 0.5) * 30)
 		end
 
-		flyRocket(player, originPos, impactPos, mark, function()
+		flyRocket(player, originPos, impactPos, mark, teamColor, function()
 			-- Авторитетный прилёт: урон/оглушение зданий считает сервер.
 			local destroyed = FarmManager.ApplyRocketImpact(targetPlotId, impactPos, damage)
 			Remotes.Get("RocketImpact"):FireAllClients({

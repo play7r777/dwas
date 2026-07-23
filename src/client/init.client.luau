@@ -45,14 +45,11 @@ rocketState.OnClientEvent:Connect(function(data)
 	HudManager.UpdateRocketState(data)
 end)
 
+-- Текстовых уведомлений больше нет: ошибки — красная вспышка денежного счётчика,
+-- успехи — зелёная (сама сумма и так анимируется при изменении).
 local notify = Remotes.Get("Notify")
-notify.OnClientEvent:Connect(function(message, kind)
-	local colors = {
-		success = Color3.fromRGB(98, 220, 144),
-		error = Color3.fromRGB(239, 117, 91),
-		info = Color3.fromRGB(235, 239, 241),
-	}
-	HudManager.ShowNotification(message, colors[kind] or colors.info)
+notify.OnClientEvent:Connect(function(_message, kind)
+	HudManager.FlashFeedback(kind)
 end)
 
 local spawnIncomeFX = Remotes.Get("SpawnIncomeFX")

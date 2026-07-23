@@ -1,6 +1,9 @@
--- HudManager.luau — деньги (внизу по центру), уведомления и сценарий ракетного удара.
+-- HudManager.luau — деньги (внизу по центру), настройки (⚙ справа снизу)
+-- и сценарий ракетного удара. НИКАКИХ текстовых плашек по центру экрана:
+-- ошибки показываются красной вспышкой денежного счётчика, подсказки прицела —
+-- одной строкой под верхней плашкой во время прицеливания.
 --
--- Сценарий запуска (v3, без бокового меню):
+-- Сценарий запуска (без бокового меню):
 --   1. Игрок подходит к своей установке и удерживает E (ProximityPrompt).
 --   2. Камера СРАЗУ переносится к первому вражескому острову.
 --   3. A / D (или стрелки ◀ ▶ сверху, между ними — ник владельца) листают острова.
@@ -25,12 +28,15 @@ local HudManager = {}
 
 local animEnabled = true
 local rocketReady = Config.START_LAUNCHERS
-local notifFrame, notifLabel, notifThread
 
 -- Деньги (нижняя панель)
-local moneyText, moneyLogoScale
+local moneyText, moneyStroke, moneyLogoScale
 local shownMoney = 0
-local moneyThread
+local moneyThread, moneyPopTween
+local flashToken = 0
+
+-- Настройки (шестерёнка)
+local settingsPanel, animToggleBtn
 
 -- Состояние сценария прицеливания.
 local topBar, ownerLabel, islandLabel, hintLabel, launchButton
@@ -47,6 +53,9 @@ local savedJumpPower, savedJumpHeight
 -- Сохранённое состояние камеры для восстановления после прицеливания.
 local cameraFocused = false
 local savedCameraType, savedCameraSubject
+
+local GOLD_TEXT = Color3.fromRGB(255, 227, 125)
+local GOLD_STROKE = Color3.fromRGB(255, 214, 90)
 
 local function makeFrame(parent, size, pos, color, alpha, name)
 	local f = Instance.new("Frame")
@@ -95,15 +104,38 @@ local function makeButton(parent, text, size, pos, bgColor, textColor)
 	return b
 end
 
-function HudManager.ShowNotification(text, color)
-	if notifLabel and notifFrame then
-		notifLabel.Text = text
-		notifLabel.TextColor3 = color or Color3.fromRGB(255, 255, 255)
-		notifFrame.Visible = true
-		if notifThread then task.cancel(notifThread) end
-		notifThread = task.delay(4.5, function()
-			if notifFrame then notifFrame.Visible = false end
-		end)
+-- Вспышка денежного счётчика вместо текстовых уведомлений: красная — ошибка
+-- (не хватает денег и т.п.), зелёная — успех. Никаких плашек по центру экрана.
+function HudManager.FlashFeedback(kind)
+	if not moneyText then return end
+	flashToken += 1
+	local token = flashToken
+	local color = kind == "error" and Color3.fromRGB(255, 90, 80) or Color3.fromRGB(120, 235, 150)
+	moneyText.TextColor3 = color
+	if moneyStroke then
+		moneyStroke.Color = color
+		moneyStroke.Transparency = 0.2
+	end
+	task.delay(0.5, function()
+		if flashToken ~= token then return end
+		if moneyText then moneyText.TextColor3 = GOLD_TEXT end
+		if moneyStroke then
+			moneyStroke.Color = GOLD_STROKE
+			moneyStroke.Transparency = 0.72
+		end
+	end)
+end
+
+-- Совместимость со старым API: текстовых уведомлений больше нет.
+function HudManager.ShowNotification(_text, _color)
+	HudManager.FlashFeedback("error")
+end
+
+-- Подсказка прицела (видна только во время прицеливания, под верхней плашкой).
+local function setHint(text, color)
+	if hintLabel and hintLabel.Visible then
+		hintLabel.Text = text
+		hintLabel.TextColor3 = color or Color3.fromRGB(255, 214, 90)
 	end
 end
 
@@ -299,7 +331,7 @@ function HudManager.OpenTargeting()
 	if player:GetAttribute("PlotId") == nil then return end
 	targets = collectTargets()
 	if #targets == 0 then
-		HudManager.ShowNotification("Нет доступных целей", Color3.fromRGB(255, 180, 40))
+		HudManager.FlashFeedback("error")
 		return
 	end
 	targetingActive = true
@@ -319,11 +351,12 @@ local function doLaunch()
 	local entry = targets[targetIndex]
 	if not entry then return end
 	if not aimPos then
-		HudManager.ShowNotification("Сначала выберите точку удара", Color3.fromRGB(255, 180, 40))
+		setHint("Сначала выберите точку удара — кликните по острову", Color3.fromRGB(255, 180, 40))
 		return
 	end
 	if rocketReady <= 0 then
-		HudManager.ShowNotification("Все ракеты перезаряжаются", Color3.fromRGB(239, 117, 91))
+		setHint("Все ракеты перезаряжаются", Color3.fromRGB(255, 110, 95))
+		HudManager.FlashFeedback("error")
 		return
 	end
 	local plotId, pos = entry.plotId, aimPos
@@ -346,16 +379,13 @@ local function onWorldClick(input, gpe)
 	if not part then return end
 	local plotId = findClickedPlot(part)
 	if plotId ~= entry.plotId then
-		HudManager.ShowNotification("Кликните по выбранному острову", Color3.fromRGB(255, 180, 40))
+		setHint("Кликните по выбранному острову", Color3.fromRGB(255, 180, 40))
 		return
 	end
 	aimPos = mouse.Hit.Position
 	showMarker(aimPos)
 	setLaunchEnabled(true)
-	if hintLabel then
-		hintLabel.Text = "Точка удара выбрана — жмите ЗАПУСК"
-		hintLabel.TextColor3 = Color3.fromRGB(98, 220, 144)
-	end
+	setHint("Точка удара выбрана — жмите ЗАПУСК", Color3.fromRGB(98, 220, 144))
 end
 
 -- Создаёт ProximityPrompt на КАЖДОЙ своей установке.
@@ -411,27 +441,22 @@ function HudManager.Init(initAnimEnabled)
 	screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Global
 	screenGui.Parent = playerGui
 
-	-- Уведомления (верх, по центру)
-	notifFrame = makeFrame(screenGui, UDim2.new(0, 360, 0, 50), UDim2.new(0.5, -180, 0, 96), Color3.fromRGB(20, 20, 25), 0.1, "NotifFrame")
-	notifFrame.ZIndex = 20
-	notifFrame.Visible = false
-
-	notifLabel = makeLabel(notifFrame, "", UDim2.new(1, -10, 1, 0), UDim2.new(0, 5, 0, 0), Color3.fromRGB(255, 255, 255), 14, Enum.Font.GothamBold)
-	notifLabel.TextXAlignment = Enum.TextXAlignment.Center
-
 	-- === Деньги: внизу, горизонтально по центру, слева круглый логотип бакса ===
 	local moneyBar = makeFrame(screenGui, UDim2.new(0, 230, 0, 56), UDim2.new(0.5, -115, 1, -72), Color3.fromRGB(14, 18, 24), 0.08, "MoneyBar")
 	moneyBar:FindFirstChildOfClass("UICorner").CornerRadius = UDim.new(0, 28)
-	local moneyStroke = Instance.new("UIStroke")
-	moneyStroke.Color = Color3.fromRGB(255, 214, 90)
+	moneyStroke = Instance.new("UIStroke")
+	moneyStroke.Color = GOLD_STROKE
 	moneyStroke.Transparency = 0.72
 	moneyStroke.Thickness = 1.4
 	moneyStroke.Parent = moneyBar
 
+	-- Якорь по центру: масштабирование «пульса» идёт от центра, логотип всегда
+	-- отцентрован по вертикали (раньше при прокачке он «уезжал» вниз).
 	local logo = Instance.new("Frame")
 	logo.Name = "DollarLogo"
+	logo.AnchorPoint = Vector2.new(0.5, 0.5)
 	logo.Size = UDim2.new(0, 40, 0, 40)
-	logo.Position = UDim2.new(0, 8, 0.5, -20)
+	logo.Position = UDim2.new(0, 28, 0.5, 0)
 	logo.BackgroundColor3 = Color3.fromRGB(52, 206, 118)
 	logo.BorderSizePixel = 0
 	logo.Parent = moneyBar
@@ -444,9 +469,37 @@ function HudManager.Init(initAnimEnabled)
 	local dollar = makeLabel(logo, "$", UDim2.new(1, 0, 1, 0), UDim2.new(), Color3.fromRGB(255, 255, 255), 24, Enum.Font.GothamBlack)
 	dollar.TextXAlignment = Enum.TextXAlignment.Center
 
-	moneyText = makeLabel(moneyBar, "0", UDim2.new(1, -66, 1, 0), UDim2.new(0, 58, 0, 0), Color3.fromRGB(255, 227, 125), 22, Enum.Font.GothamBold)
+	moneyText = makeLabel(moneyBar, "0", UDim2.new(1, -66, 1, 0), UDim2.new(0, 58, 0, 0), GOLD_TEXT, 22, Enum.Font.GothamBold)
 	moneyText.TextXAlignment = Enum.TextXAlignment.Left
 	moneyText.TextYAlignment = Enum.TextYAlignment.Center
+
+	-- === Шестерёнка настроек (правый нижний угол) ===
+	local gearBtn = makeButton(screenGui, "⚙️", UDim2.new(0, 46, 0, 46), UDim2.new(1, -58, 1, -58), Color3.fromRGB(22, 28, 36))
+	gearBtn:FindFirstChildOfClass("UICorner").CornerRadius = UDim.new(1, 0)
+	gearBtn.TextSize = 22
+
+	settingsPanel = makeFrame(screenGui, UDim2.new(0, 264, 0, 64), UDim2.new(1, -276, 1, -130), Color3.fromRGB(14, 18, 24), 0.06, "SettingsPanel")
+	settingsPanel:FindFirstChildOfClass("UICorner").CornerRadius = UDim.new(0, 14)
+	settingsPanel.Visible = false
+
+	makeLabel(settingsPanel, "Анимация полёта ракеты", UDim2.new(1, -102, 1, 0), UDim2.new(0, 14, 0, 0), Color3.fromRGB(218, 226, 232), 14)
+
+	animToggleBtn = makeButton(settingsPanel, "ВКЛ", UDim2.new(0, 74, 0, 34), UDim2.new(1, -84, 0.5, -17), Color3.fromRGB(52, 190, 110))
+	local function refreshToggle()
+		animToggleBtn.Text = animEnabled and "ВКЛ" or "ВЫКЛ"
+		animToggleBtn.BackgroundColor3 = animEnabled and Color3.fromRGB(52, 190, 110) or Color3.fromRGB(90, 98, 108)
+	end
+	refreshToggle()
+
+	gearBtn.MouseButton1Click:Connect(function()
+		settingsPanel.Visible = not settingsPanel.Visible
+	end)
+	animToggleBtn.MouseButton1Click:Connect(function()
+		animEnabled = not animEnabled
+		refreshToggle()
+		-- Сохраняется НАВСЕГДА (DataStore на сервере, см. DataManager).
+		Remotes.Get("SetAnimSetting"):FireServer(animEnabled)
+	end)
 
 	-- === Верхняя плашка прицеливания: ◀ [ник] ▶ и ✕ ===
 	topBar = makeFrame(screenGui, UDim2.new(0, 460, 0, 68), UDim2.new(0.5, -230, 0, 14), Color3.fromRGB(14, 18, 24), 0.12, "TargetBar")
@@ -544,8 +597,8 @@ function HudManager.Init(initAnimEnabled)
 		while true do
 			ensurePrompts()
 			if targetingActive and not targetingStillValid() then
-				HudManager.ShowNotification("Ракетная установка недоступна", Color3.fromRGB(239, 117, 91))
 				HudManager.CloseTargeting()
+				HudManager.FlashFeedback("error")
 			end
 			task.wait(1)
 		end
@@ -560,8 +613,12 @@ function HudManager.UpdateData(data)
 	if moneyThread then task.cancel(moneyThread) end
 	local from = shownMoney
 	if from ~= target and moneyLogoScale then
-		local pop = TweenService:Create(moneyLogoScale, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out, 0, true), { Scale = 1.18 })
-		pop:Play()
+		-- Гасим предыдущий пульс и сбрасываем масштаб: незавершённый твин
+		-- оставлял Scale > 1 и логотип «уезжал» из центра.
+		if moneyPopTween then moneyPopTween:Cancel() end
+		moneyLogoScale.Scale = 1
+		moneyPopTween = TweenService:Create(moneyLogoScale, TweenInfo.new(0.12, Enum.EasingStyle.Quad, Enum.EasingDirection.Out, 0, true), { Scale = 1.15 })
+		moneyPopTween:Play()
 	end
 	moneyThread = task.spawn(function()
 		local t0 = os.clock()

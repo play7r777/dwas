@@ -2,12 +2,14 @@
 --
 -- v3: восемь КРУПНЫХ островов кольцом вокруг пустого центра (центральный остров
 -- убран). На каждом острове 4 ракетных стенда; перед каждым — зелёный круг
--- покупки/прокачки. Внешний вид ракеты меняется каждые 5 уровней (Mark I..IV).
+-- покупки/прокачки. Внешний вид ракеты меняется каждые 5 уровней (Mark I..IV),
+-- геометрия ракеты общая с летящей ракетой (см. RocketFactory).
 
 local Players           = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local sharedFolder      = ReplicatedStorage:WaitForChild("Shared", 10)
 local Config            = require(sharedFolder:WaitForChild("Config"))
+local RocketFactory     = require(script.Parent:WaitForChild("RocketFactory"))
 
 local PlotManager = {}
 
@@ -65,12 +67,14 @@ local function makeWedge(parent, name, size, cframe, color, material)
 	return part
 end
 
+-- Акула плавает ПОД водой и периодически всплывает так, что над поверхностью
+-- видно ТОЛЬКО спинной плавник (как в кино) — тело никогда не выходит из воды.
 local function buildShark(parent, index)
 	local model = Instance.new("Model")
 	model.Name = "Shark_" .. index
 	model.Parent = parent
 
-	-- Центр карты теперь пустая вода — акулы кружат именно там.
+	-- Центр карты — пустая вода: акулы кружат именно там.
 	local radius = 130 + (index % 4) * 70
 	local angle = index / 16 * math.pi * 2
 	local body = makePart(model, "Body", Vector3.new(4, 4, 13), CFrame.new(), Color3.fromRGB(67, 88, 101), Enum.Material.SmoothPlastic)
@@ -84,10 +88,17 @@ local function buildShark(parent, index)
 
 	task.spawn(function()
 		local t = angle
+		local phase = index * 1.3
+		-- Глубина "дышит" синусом: от -13 (глубоко) до -3 (у самой поверхности).
+		-- На пике всплытия верх тела остаётся под водой, наружу торчит только плавник.
+		local function depthAt(tt)
+			return (Config.WATER_LEVEL - 3) - (math.sin(tt * 2.2 + phase) + 1) * 5
+		end
 		while model.Parent do
 			t += 0.007
-			local position = Vector3.new(math.cos(t) * radius, Config.WATER_LEVEL - 15, math.sin(t) * radius)
-			local nextPosition = Vector3.new(math.cos(t + 0.03) * radius, position.Y, math.sin(t + 0.03) * radius)
+			local y = depthAt(t)
+			local position = Vector3.new(math.cos(t) * radius, y, math.sin(t) * radius)
+			local nextPosition = Vector3.new(math.cos(t + 0.03) * radius, depthAt(t + 0.03), math.sin(t + 0.03) * radius)
 			model:PivotTo(CFrame.lookAt(position, nextPosition))
 			fin.CFrame = body.CFrame * CFrame.new(0, 3, 1) * CFrame.Angles(0, 0, math.rad(45))
 			tail.CFrame = body.CFrame * CFrame.new(0, 0, 7)
@@ -156,6 +167,26 @@ local function buildIslandBase(folder, position, sandColor)
 	return sand, sandRadius
 end
 
+-- Деревянный трап с воды на южный берег: выпал за остров — заплыл к трапу
+-- и поднялся обратно (раньше с воды было не залезть).
+local function buildReturnRamp(folder, position)
+	local ramp = makeWedge(
+		folder,
+		"ReturnRamp",
+		Vector3.new(10, 22, 48),
+		-- lookAt от острова: локальный +Z (высокая грань клина) смотрит на остров.
+		CFrame.lookAt(position + Vector3.new(0, -1, 112), position + Vector3.new(0, -1, 200)),
+		Color3.fromRGB(128, 90, 50),
+		Enum.Material.WoodPlanks
+	)
+	ramp.CanCollide = true
+
+	-- Пара свай у нижнего (водного) конца трапа
+	for _, x in ipairs({ -4, 4 }) do
+		makeCylinder(folder, "RampPost", 14, 1.4, position + Vector3.new(x, -17, 128), Color3.fromRGB(73, 52, 34), Enum.Material.Wood)
+	end
+end
+
 -- Большая красивая пальма: изогнутый ствол из сегментов-цилиндров, крона из листьев и кокосы.
 local function buildPalm(parent, basePos, yawDeg, scale)
 	local model = Instance.new("Model")
@@ -210,7 +241,7 @@ local function buildPalm(parent, basePos, yawDeg, scale)
 end
 
 -- Расставляет пальмы и камни по песчаному кольцу острова, обходя зону ракетных
--- стендов (северная полоса), точку спавна и центр-лужайку.
+-- стендов (северная полоса), точку спавна, южный коридор к трапу и центр-лужайку.
 local function buildIslandDecor(parent, position, plotId)
 	local decor = Instance.new("Folder")
 	decor.Name = "IslandDecor"
@@ -231,7 +262,9 @@ local function buildIslandDecor(parent, position, plotId)
 		local dz = pos.Z - position.Z
 		-- Полоса ракетных стендов и зелёных кругов: не сажаем пальмы внутрь.
 		local inLauncherZone = dz > -44 and dz < -8 and math.abs(dx) < 56
-		if not inLauncherZone and (pos - spawnPos).Magnitude > 14 then
+		-- Южный коридор к трапу (путь с воды к спавну) держим свободным.
+		local inRampCorridor = dz > 26 and math.abs(dx) < 9
+		if not inLauncherZone and not inRampCorridor and (pos - spawnPos).Magnitude > 14 then
 			buildPalm(decor, pos, math.deg(ang) + math.random(-40, 40), 0.85 + math.random() * 0.55)
 			placed += 1
 		end
@@ -242,111 +275,6 @@ local function buildIslandDecor(parent, position, plotId)
 		local rock = makePart(decor, "BeachRock_" .. index, Vector3.new(5 + index, 3 + index % 2, 5 + index), CFrame.new(position + offset), Color3.fromRGB(111, 105, 91), Enum.Material.Rock)
 		rock.Shape = Enum.PartType.Ball
 	end
-end
-
--- === Ракеты четырёх поколений (Mark I..IV) ===
--- Ракеты v3 стали ШИРЕ и ВЫШЕ; каждые 5 уровней прокачки стенд перестраивается
--- в следующий Mark (см. Config.RocketMark + PlotManager.RebuildLauncher).
-local MARK_SPECS = {
-	[1] = { -- классическая белая ракета
-		dia = 4.6, bodyH = 15, noseH = 4.5, finH = 6.4, boosters = 0, rings = 0,
-		bodyColor = Color3.fromRGB(236, 239, 241), bodyMat = Enum.Material.SmoothPlastic,
-	},
-	[2] = { -- с двумя боковыми ускорителями
-		dia = 5.0, bodyH = 18, noseH = 5.2, finH = 7.2, boosters = 2, rings = 1,
-		bodyColor = Color3.fromRGB(240, 243, 244), bodyMat = Enum.Material.SmoothPlastic,
-	},
-	[3] = { -- тяжёлая тёмная с неоновыми кольцами
-		dia = 5.6, bodyH = 21, noseH = 5.8, finH = 8, boosters = 0, rings = 3,
-		bodyColor = Color3.fromRGB(60, 64, 72), bodyMat = Enum.Material.Metal, dark = true,
-	},
-	[4] = { -- флагман: три ускорителя, золотой нос и неоновое гало
-		dia = 6.0, bodyH = 23, noseH = 6.4, finH = 9, boosters = 3, rings = 2,
-		bodyColor = Color3.fromRGB(245, 246, 248), bodyMat = Enum.Material.SmoothPlastic,
-		goldAccent = true, halo = true,
-	},
-}
-
--- Строит ракету поколения mark над basePos (уровень песка). Возвращает список
--- частей (для скрытия на перезарядке), иллюминатор и точку вылета (нос).
-local function buildRocketModel(model, basePos, teamColor, mark)
-	local spec = MARK_SPECS[mark] or MARK_SPECS[1]
-	local accent = spec.goldAccent and Color3.fromRGB(255, 199, 70) or teamColor
-	local parts = {}
-	local function reg(part)
-		part.CanCollide = false
-		table.insert(parts, part)
-		return part
-	end
-
-	local bottomY = basePos.Y + 0.65 -- верх бетонной площадки
-
-	-- Двигательный отсек: сопло, юбка и тёплое свечение
-	reg(makeCylinder(model, "Nozzle", 2.2, spec.dia * 0.62, Vector3.new(basePos.X, bottomY + 1.1, basePos.Z), Color3.fromRGB(40, 42, 46), Enum.Material.Metal))
-	reg(makeCylinder(model, "Skirt", 1.6, spec.dia * 0.92, Vector3.new(basePos.X, bottomY + 2.6, basePos.Z), Color3.fromRGB(70, 74, 80), Enum.Material.Metal))
-	reg(makeCylinder(model, "EngineGlow", 0.5, spec.dia * 0.5, Vector3.new(basePos.X, bottomY + 0.35, basePos.Z), Color3.fromRGB(255, 170, 60), Enum.Material.Neon))
-
-	-- Корпус
-	local bodyH = spec.bodyH
-	local bodyCenterY = bottomY + 3.4 + bodyH / 2
-	local body = makeCylinder(model, "Body", bodyH, spec.dia, Vector3.new(basePos.X, bodyCenterY, basePos.Z), spec.bodyColor, spec.bodyMat)
-	table.insert(parts, body)
-
-	-- Полоса команды + неоновые кольца прокачанных версий
-	reg(makeCylinder(model, "Stripe", 2.0, spec.dia * 1.04, Vector3.new(basePos.X, bodyCenterY + bodyH * 0.18, basePos.Z), accent, Enum.Material.SmoothPlastic))
-	for r = 1, (spec.rings or 0) do
-		local ringY = bodyCenterY - bodyH / 2 + bodyH * r / (spec.rings + 1)
-		reg(makeCylinder(model, "Ring_" .. r, 0.7, spec.dia * 1.06, Vector3.new(basePos.X, ringY, basePos.Z), spec.dark and teamColor or accent, Enum.Material.Neon))
-	end
-
-	-- Иллюминатор смотрит на центр острова (+Z от стенда)
-	local window = makePart(model, "Window", Vector3.new(0.5, 1.6, 1.6), CFrame.new(Vector3.new(basePos.X, bodyCenterY + bodyH * 0.32, basePos.Z + spec.dia / 2 + 0.05)) * CFrame.Angles(0, math.rad(90), 0), Color3.fromRGB(125, 214, 238), Enum.Material.Glass)
-	window.Shape = Enum.PartType.Cylinder
-	window.CanCollide = false
-
-	-- Конусообразный нос из сужающихся секций + шпиль
-	local noseBottom = bodyCenterY + bodyH / 2
-	local noseSegs = 5
-	for i = 1, noseSegs do
-		local d = spec.dia * (1 - (i / noseSegs) * 0.82)
-		local segH = spec.noseH / noseSegs
-		reg(makeCylinder(model, "Nose_" .. i, segH, math.max(d, 0.6), Vector3.new(basePos.X, noseBottom + (i - 0.5) * segH, basePos.Z), accent, Enum.Material.SmoothPlastic))
-	end
-	local tipY = noseBottom + spec.noseH
-	reg(makePart(model, "Tip", Vector3.new(0.5, 2.2, 0.5), CFrame.new(Vector3.new(basePos.X, tipY + 0.9, basePos.Z)), Color3.fromRGB(226, 228, 232), Enum.Material.Metal))
-
-	-- Неоновое гало флагмана
-	if spec.halo then
-		local halo = makeCylinder(model, "Halo", 0.4, spec.dia + 3, Vector3.new(basePos.X, tipY - 1, basePos.Z), accent, Enum.Material.Neon)
-		halo.Transparency = 0.3
-		reg(halo)
-	end
-
-	-- Боковые ускорители
-	if (spec.boosters or 0) > 0 then
-		local boosterD = spec.dia * 0.36
-		local boosterH = bodyH * 0.55
-		for i = 1, spec.boosters do
-			local a = math.rad(360 / spec.boosters * i + 90)
-			local bx = basePos.X + math.cos(a) * (spec.dia / 2 + boosterD / 2 + 0.1)
-			local bz = basePos.Z + math.sin(a) * (spec.dia / 2 + boosterD / 2 + 0.1)
-			reg(makeCylinder(model, "Booster_" .. i, boosterH, boosterD, Vector3.new(bx, bottomY + 2.0 + boosterH / 2, bz), spec.bodyColor, spec.bodyMat))
-			reg(makeCylinder(model, "BoosterNose_" .. i, 1.4, boosterD * 0.55, Vector3.new(bx, bottomY + 2.0 + boosterH + 0.7, bz), accent, Enum.Material.SmoothPlastic))
-		end
-	end
-
-	-- Стабилизаторы
-	for i = 1, 4 do
-		local a = math.rad(i * 90 + 45)
-		local dist = spec.dia / 2 + 0.9
-		local finPos = Vector3.new(basePos.X + math.cos(a) * dist, bottomY + spec.finH / 2 + 0.4, basePos.Z + math.sin(a) * dist)
-		local fin = makeWedge(model, "Fin_" .. i, Vector3.new(0.7, spec.finH, 3.6), CFrame.new(finPos) * CFrame.Angles(0, -a + math.rad(90), 0), accent, Enum.Material.SmoothPlastic)
-		fin.CanCollide = false
-		table.insert(parts, fin)
-	end
-
-	local origin = Vector3.new(basePos.X, tipY + 2, basePos.Z)
-	return parts, window, origin
 end
 
 local function buildIslandModel(plotId, position)
@@ -361,6 +289,7 @@ local function buildIslandModel(plotId, position)
 	-- Единые сплошные цилиндры вместо перекрывающихся сегментов (устраняет z-fighting песка).
 	buildIslandBase(folder, position, Color3.fromRGB(235, 211, 149))
 	buildIslandDecor(folder, position, plotId)
+	buildReturnRamp(folder, position)
 
 	-- Спавн НЕВИДИМ: раньше это был "второй квадрат песка", плававший над пляжем
 	-- рядом с ракетой. Точка респавна работает, но геометрии больше не видно.
@@ -410,8 +339,9 @@ local function buildIslandModel(plotId, position)
 		buyPad.Parent = folder
 
 		-- Ценник над кнопкой. Enabled = false: видимостью управляет клиент
-		-- (PriceTags) — ценники показываются ТОЛЬКО на своём острове. Атрибут
-		-- Unlocked отражает, открыт ли слот (последовательное открытие слотов).
+		-- (PriceTags) — ценники показываются ТОЛЬКО на своём острове и ТОЛЬКО
+		-- когда игрок стоит рядом (меньше текста на экране). Атрибут Unlocked
+		-- отражает, открыт ли слот (последовательное открытие слотов).
 		local billboard = Instance.new("BillboardGui")
 		billboard.Name = "PriceTag"
 		billboard.Size = UDim2.new(0, 150, 0, 44)
@@ -528,6 +458,12 @@ function PlotManager.Init()
 	-- Центральный остров убран: центр карты — открытая вода с акулами.
 	local oldCentral = workspace:FindFirstChild("CentralIsland")
 	if oldCentral then oldCentral:Destroy() end
+	-- Убираем «зелёную поляну под водой» — Baseplate/спавн из шаблона Studio,
+	-- если они остались в place-файле (по ним и "ходили" акулы).
+	for _, strayName in ipairs({ "Baseplate", "SpawnLocation" }) do
+		local stray = workspace:FindFirstChild(strayName)
+		if stray then stray:Destroy() end
+	end
 
 	buildOcean()
 
@@ -566,6 +502,29 @@ function PlotManager.Init()
 			playerPlot[player] = nil
 		end
 	end)
+
+	-- Страховка «выпал за карту»: раз в 3 секунды возвращаем на спавн тех, кто
+	-- провалился под дно или уплыл за границу мира.
+	task.spawn(function()
+		local half = Config.WORLD_SIZE / 2 + 60
+		while true do
+			task.wait(3)
+			for _, player in ipairs(Players:GetPlayers()) do
+				local char = player.Character
+				local hrp = char and char:FindFirstChild("HumanoidRootPart")
+				if hrp then
+					local p = hrp.Position
+					if p.Y < Config.SEABED_LEVEL - 2 or math.abs(p.X) > half or math.abs(p.Z) > half then
+						local id = playerPlot[player]
+						local plot = id and plots[id]
+						if plot then
+							char:PivotTo(plot.spawn.CFrame + Vector3.new(0, 4, 0))
+						end
+					end
+				end
+			end
+		end
+	end)
 end
 
 -- Создание стенда с ракетой нужного поколения (level определяет Mark).
@@ -593,7 +552,9 @@ function PlotManager.CreateLauncher(player, launcherIndex, level)
 	local rim = makeCylinder(model, "ReadyRim", 0.5, 14.4, basePos + Vector3.new(0, 0.66, 0), teamColor, Enum.Material.Neon)
 	rim.CanCollide = false
 
-	local parts, window, origin = buildRocketModel(model, basePos, teamColor, mark)
+	-- Сама ракета — из общего конструктора (та же геометрия, что у летящей).
+	local parts, window, height = RocketFactory.Build(model, CFrame.new(basePos + Vector3.new(0, 0.65, 0)), teamColor, mark, 1, true)
+	local origin = Vector3.new(basePos.X, basePos.Y + 0.65 + height + 2, basePos.Z)
 
 	-- Запуск идёт через прицел (клавиша E на стенде), см. HudManager.
 

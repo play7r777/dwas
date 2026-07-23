@@ -1,7 +1,10 @@
--- RocketAnim.luau - кинокамера стрелка следует за СЕРВЕРНОЙ ракетой; взрыв + звук при прилёте
+-- RocketAnim.luau - кинокамера стрелка следует за СЕРВЕРНОЙ ракетой; взрыв с
+-- настоящим чёрным дымом при прилёте. ЛКМ во время полёта пропускает анимацию
+-- (камера сразу возвращается к персонажу, ракета долетает сама).
 local Players           = game:GetService("Players")
 local TweenService      = game:GetService("TweenService")
 local RunService        = game:GetService("RunService")
+local UserInputService  = game:GetService("UserInputService")
 local Debris            = game:GetService("Debris")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local sharedFolder      = ReplicatedStorage:WaitForChild("Shared", 10)
@@ -12,8 +15,10 @@ local player = Players.LocalPlayer
 
 local RocketAnim = {}
 
+local SMOKE_TEXTURE = "rbxassetid://241594419"
+
 local function spawnExplosion(pos)
-	-- Настоящий Explosion (без урона игрокам) + вспышка/кольцо/дым.
+	-- Настоящий Explosion (без урона игрокам) + вспышка и ударное кольцо.
 	local explosion = Instance.new("Explosion")
 	explosion.Position = pos
 	explosion.BlastRadius = 24
@@ -63,33 +68,73 @@ local function spawnExplosion(pos)
 	sound.Parent = ball
 	sound:Play()
 
-	for _ = 1, 8 do
-		task.spawn(function()
-			local smoke = Instance.new("Part")
-			smoke.Shape = Enum.PartType.Ball
-			smoke.Size = Vector3.new(3, 3, 3)
-			smoke.Position = pos + Vector3.new(
-				(math.random() - 0.5) * 10,
-				math.random() * 6,
-				(math.random() - 0.5) * 10
-			)
-			smoke.Anchored = true
-			smoke.CanCollide = false
-			smoke.Material = Enum.Material.SmoothPlastic
-			smoke.Color = Color3.fromRGB(60 + math.random(30), 60 + math.random(30), 65)
-			smoke.Parent = workspace
+	-- НАСТОЯЩИЙ чёрный дым: клубящиеся частицы вместо серых шаров-«кругов».
+	local smokeHolder = Instance.new("Part")
+	smokeHolder.Size = Vector3.new(1, 1, 1)
+	smokeHolder.Position = pos + Vector3.new(0, 2, 0)
+	smokeHolder.Anchored = true
+	smokeHolder.CanCollide = false
+	smokeHolder.Transparency = 1
+	smokeHolder.Parent = workspace
 
-			local st = TweenService:Create(smoke,
-				TweenInfo.new(0.9, Enum.EasingStyle.Quad),
-				{ Size = Vector3.new(9, 9, 9), Transparency = 1, Position = smoke.Position + Vector3.new(0, 10, 0) })
-			st:Play()
-			Debris:AddItem(smoke, 1)
-		end)
-	end
+	local smoke = Instance.new("ParticleEmitter")
+	smoke.Name = "ImpactSmoke"
+	smoke.Texture = SMOKE_TEXTURE
+	smoke.Color = ColorSequence.new({
+		ColorSequenceKeypoint.new(0, Color3.fromRGB(28, 28, 30)),
+		ColorSequenceKeypoint.new(0.5, Color3.fromRGB(52, 52, 55)),
+		ColorSequenceKeypoint.new(1, Color3.fromRGB(96, 96, 100)),
+	})
+	smoke.Size = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 5),
+		NumberSequenceKeypoint.new(0.35, 10),
+		NumberSequenceKeypoint.new(1, 16),
+	})
+	smoke.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0.12),
+		NumberSequenceKeypoint.new(0.6, 0.45),
+		NumberSequenceKeypoint.new(1, 1),
+	})
+	smoke.Lifetime = NumberRange.new(1.4, 2.6)
+	smoke.Speed = NumberRange.new(10, 20)
+	smoke.SpreadAngle = Vector2.new(85, 85)
+	smoke.Acceleration = Vector3.new(0, 7, 0)
+	smoke.Drag = 1.2
+	smoke.Rotation = NumberRange.new(-180, 180)
+	smoke.RotSpeed = NumberRange.new(-40, 40)
+	smoke.EmissionDirection = Enum.NormalId.Top
+	smoke.Rate = 0
+	smoke.Parent = smokeHolder
+
+	-- Короткая огненная вспышка внутри дыма.
+	local fire = Instance.new("ParticleEmitter")
+	fire.Name = "ImpactFire"
+	fire.Texture = SMOKE_TEXTURE
+	fire.Color = ColorSequence.new(Color3.fromRGB(255, 150, 40), Color3.fromRGB(200, 60, 20))
+	fire.LightEmission = 0.9
+	fire.Size = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 3),
+		NumberSequenceKeypoint.new(1, 7),
+	})
+	fire.Transparency = NumberSequence.new({
+		NumberSequenceKeypoint.new(0, 0.1),
+		NumberSequenceKeypoint.new(1, 1),
+	})
+	fire.Lifetime = NumberRange.new(0.3, 0.6)
+	fire.Speed = NumberRange.new(14, 26)
+	fire.SpreadAngle = Vector2.new(70, 70)
+	fire.EmissionDirection = Enum.NormalId.Top
+	fire.Rate = 0
+	fire.Parent = smokeHolder
+
+	smoke:Emit(45)
+	fire:Emit(25)
+	Debris:AddItem(smokeHolder, 4.5)
 end
 
 -- Камера стрелка ведёт СЕРВЕРНУЮ ракету (её инстанс приходит по RocketFollow),
 -- пока сервер её не уничтожит; затем плавно возвращает управление игроку.
+-- Клик ЛКМ (или тап) в любой момент ПРОПУСКАЕТ анимацию: камера сразу к игроку.
 function RocketAnim.Follow(rocketModel, animEnabled)
 	if not animEnabled then return end
 	if typeof(rocketModel) ~= "Instance" then return end
@@ -103,17 +148,34 @@ function RocketAnim.Follow(rocketModel, animEnabled)
 	camera.CameraType = Enum.CameraType.Scriptable
 
 	task.spawn(function()
+		local skipped = false
+		local skipConn = UserInputService.InputBegan:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+				skipped = true
+			end
+		end)
+
 		local lastPos = root.Position
 		local startT = os.clock()
-		while rocketModel.Parent and root.Parent and (os.clock() - startT) < (Config.ROCKET_ANIM_TIME + 3) do
+		-- Летящая ракета крупнее прежней — камера чуть дальше и выше.
+		while rocketModel.Parent and root.Parent and not skipped and (os.clock() - startT) < (Config.ROCKET_ANIM_TIME + 3) do
 			local pos = root.Position
 			local look = root.CFrame.LookVector
 			if look.Magnitude < 0.001 then look = Vector3.new(0, 0, -1) end
 			local side = look:Cross(Vector3.new(0, 1, 0))
-			local camPos = pos - look * 24 + Vector3.new(0, 10, 0) + side * 6
+			local camPos = pos - look * 30 + Vector3.new(0, 12, 0) + side * 7
 			camera.CFrame = CFrame.lookAt(camPos, pos + look * 6)
 			lastPos = pos
 			RunService.RenderStepped:Wait()
+		end
+
+		skipConn:Disconnect()
+
+		if skipped then
+			-- Пропуск: мгновенно возвращаем обычную камеру (ракета долетит сама).
+			camera.CameraType = prevType or Enum.CameraType.Custom
+			if prevSubject then camera.CameraSubject = prevSubject end
+			return
 		end
 
 		-- Вид сверху на точку взрыва, затем плавный возврат к персонажу.
@@ -137,21 +199,10 @@ function RocketAnim.Follow(rocketModel, animEnabled)
 	end)
 end
 
--- Прилёт: взрыв + звук в точке удара и уведомление о результате.
+-- Прилёт: взрыв + дым + звук в точке удара (без текстовых уведомлений).
 function RocketAnim.Impact(data)
 	if not data or not data.pos then return end
 	spawnExplosion(data.pos)
-
-	local msg
-	if data.destroyed then
-		msg = string.format("%s уничтожил цель на острове %d", data.shooterName or "Игрок", data.targetPlotId or 0)
-	else
-		msg = string.format("%s атаковал остров %d", data.shooterName or "Игрок", data.targetPlotId or 0)
-	end
-	local ok, HudManager = pcall(require, script.Parent:WaitForChild("HudManager"))
-	if ok and HudManager then
-		HudManager.ShowNotification(msg, data.destroyed and Color3.fromRGB(255, 80, 80) or Color3.fromRGB(255, 180, 40))
-	end
 end
 
 return RocketAnim
