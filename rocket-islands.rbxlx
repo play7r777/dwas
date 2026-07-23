@@ -142,6 +142,27 @@ Config.Rocket = {
 Config.MAX_BUILDING_LEVEL = 10
 Config.UPGRADE_COST_MULT = 1.6
 
+-- ПИЦЦЕРИЯ (слот 1): вместо процедурного дома — Blender-меши 5 состояний,
+-- уровень 1 = убитая, уровень 5 = новенькая (чем дальше качаешь — тем чище).
+-- После 5 уровня контента пока НЕТ, поэтому слот 1 выше 5 не прокачивается.
+-- Меши кладутся в Studio: ReplicatedStorage/PizzaShopMeshes/Level1..Level5
+-- (Import 3D файлов assets/pizza_shop/pizza_shop_lvlN.obj). Пока мешей нет —
+-- играет временный процедурный домик (фолбэк).
+Config.PIZZA = {
+	MAX_LEVEL = 5,
+	FOLDER = "PizzaShopMeshes",
+	WIDTH = 24,  -- ширина здания в стадах (меш масштабируется пропорционально)
+	YAW = 180,   -- доворот меша: фасад OBJ смотрит по +Z, а в игре фасад — это -Z
+}
+
+-- Максимальный уровень для конкретного слота (у пиццерии свой потолок).
+function Config.MaxLevelForSlot(slotIndex)
+	if slotIndex == 1 then
+		return Config.PIZZA.MAX_LEVEL
+	end
+	return Config.MAX_BUILDING_LEVEL
+end
+
 -- Запуск ракеты: игрок подходит к своей установке и удерживает E, после чего камера
 -- сразу переносится к вражеским островам (без бокового меню, см. HudManager).
 -- Сервер независимо проверяет, что стрелок реально стоит рядом со своей установкой.
@@ -149,7 +170,8 @@ Config.LAUNCH_MAX_DISTANCE = 30
 
 Config.FARM_TYPES = {
 	[1] = {
-		name = "Пляжный дом",
+		-- Бывший «Пляжный дом»: теперь это ПИЦЦЕРИЯ с Blender-мешами 5 уровней.
+		name = "Пиццерия",
 		cost = 100,
 		income = 15,
 		maxHp = 120,
@@ -717,10 +739,64 @@ local TIER_STYLES = {
 	},
 }
 
+-- ПИЦЦЕРИЯ (слот 1): клонирует Blender-меш нужного уровня чистоты из
+-- ReplicatedStorage/PizzaShopMeshes/Level1..Level5 (см. Config.PIZZA).
+-- MeshId нельзя задать из скрипта в рантайме, поэтому меши должны лежать
+-- в Studio заранее (Import 3D). Вернёт nil, если мешей ещё нет — тогда
+-- сыграет процедурный фолбэк ниже.
+local function tryBuildPizzaMesh(plot, slotIndex, level, territoryFolder)
+	local meshFolder = ReplicatedStorage:FindFirstChild(Config.PIZZA.FOLDER)
+	if not meshFolder then return nil end
+	local visLevel = math.clamp(level, 1, Config.PIZZA.MAX_LEVEL)
+	local template = meshFolder:FindFirstChild("Level" .. visLevel)
+	if not template then return nil end
+
+	-- Import 3D мог создать и голый MeshPart, и Model-обёртку — достаём меш.
+	local meshPart
+	if template:IsA("BasePart") then
+		meshPart = template:Clone()
+	elseif template:IsA("Model") then
+		local inner = template:FindFirstChildWhichIsA("MeshPart", true) or template:FindFirstChildWhichIsA("BasePart", true)
+		if inner then meshPart = inner:Clone() end
+	end
+	if not meshPart then return nil end
+
+	local model = Instance.new("Model")
+	model.Name = "IncomeHome_" .. slotIndex
+	model:SetAttribute("Alive", true)
+	model.Parent = territoryFolder
+
+	-- Пропорциональный масштаб до игровой ширины
+	local scale = Config.PIZZA.WIDTH / math.max(meshPart.Size.X, 0.001)
+	meshPart.Name = "PizzaShop"
+	meshPart.Size = meshPart.Size * scale
+	meshPart.Anchored = true
+	meshPart.CanCollide = true
+
+	-- Ставим на песок площадки фасадом к центру острова (к мосту)
+	local sandTop = plot.slots[slotIndex].center + Vector3.new(0, 9.5, 0)
+	local pos = Vector3.new(sandTop.X, sandTop.Y + meshPart.Size.Y / 2, sandTop.Z)
+	local lookAt = Vector3.new(plot.center.X, pos.Y, plot.center.Z)
+	meshPart.CFrame = CFrame.lookAt(pos, lookAt) * CFrame.Angles(0, math.rad(Config.PIZZA.YAW), 0)
+	meshPart.Parent = model
+
+	return model, meshPart
+end
+
 -- Уникальные 3D модели зданий. Уровень прокачки = количество этажей: дом растёт
 -- вверх с каждым уровнем. baseCF ставит дом фасадом (входом) к центру острова.
 local function buildBuildingModel(plotId, slotIndex, tier, level, territoryFolder)
 	local plot = PlotManager.GetPlot(plotId)
+
+	-- Слот 1 — пиццерия из Blender-мешей (5 уровней: грязная → чистая).
+	if tier == 1 then
+		local pizzaModel, pizzaMesh = tryBuildPizzaMesh(plot, slotIndex, level, territoryFolder)
+		if pizzaModel then
+			return pizzaModel, pizzaMesh, nil, nil
+		end
+		-- Мешей в ReplicatedStorage ещё нет — временно строим процедурный домик.
+	end
+
 	local slotCenter = plot.slots[slotIndex].center + Vector3.new(0, 10, 0)
 	-- Дверь/фасад дома смотрит по локальной -Z; направляем -Z на центр острова (к мосту).
 	local baseCF = CFrame.lookAt(slotCenter, Vector3.new(plot.center.X, slotCenter.Y, plot.center.Z))
@@ -868,7 +944,7 @@ local function updatePriceTag(plotId, slotIndex)
 	if not data then
 		slot.priceLabel.Text = string.format("%s\n$%d", base.name, base.cost)
 		slot.priceLabel.TextColor3 = Color3.fromRGB(240, 244, 246)
-	elseif data.level >= Config.MAX_BUILDING_LEVEL then
+	elseif data.level >= Config.MaxLevelForSlot(slotIndex) then
 		slot.priceLabel.Text = string.format("%s (ур.%d)\nМакс. уровень", base.name, data.level)
 		slot.priceLabel.TextColor3 = Color3.fromRGB(255, 224, 150)
 	else
@@ -961,9 +1037,9 @@ function FarmManager.BuyOrUpgrade(player, slotIndex)
 		spawnBuilding(plotId, slotIndex, 1)
 		print(string.format("[FarmManager] %s построил %s (ур.1)", player.Name, base.name))
 	else
-		-- ПРОКАЧКА до следующего уровня.
+		-- ПРОКАЧКА до следующего уровня (у пиццерии потолок 5 — дальше контента пока нет).
 		if not data.alive then return end
-		if data.level >= Config.MAX_BUILDING_LEVEL then return end
+		if data.level >= Config.MaxLevelForSlot(slotIndex) then return end
 		local nextLevel = data.level + 1
 		local cost = Config.UpgradeCost(slotIndex, nextLevel)
 		local money = DataManager.GetMoney(player)

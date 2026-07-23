@@ -68,6 +68,27 @@ Config.Rocket = {
 Config.MAX_BUILDING_LEVEL = 10
 Config.UPGRADE_COST_MULT = 1.6
 
+-- ПИЦЦЕРИЯ (слот 1): вместо процедурного дома — Blender-меши 5 состояний,
+-- уровень 1 = убитая, уровень 5 = новенькая (чем дальше качаешь — тем чище).
+-- После 5 уровня контента пока НЕТ, поэтому слот 1 выше 5 не прокачивается.
+-- Меши кладутся в Studio: ReplicatedStorage/PizzaShopMeshes/Level1..Level5
+-- (Import 3D файлов assets/pizza_shop/pizza_shop_lvlN.obj). Пока мешей нет —
+-- играет временный процедурный домик (фолбэк).
+Config.PIZZA = {
+	MAX_LEVEL = 5,
+	FOLDER = "PizzaShopMeshes",
+	WIDTH = 24,  -- ширина здания в стадах (меш масштабируется пропорционально)
+	YAW = 180,   -- доворот меша: фасад OBJ смотрит по +Z, а в игре фасад — это -Z
+}
+
+-- Максимальный уровень для конкретного слота (у пиццерии свой потолок).
+function Config.MaxLevelForSlot(slotIndex)
+	if slotIndex == 1 then
+		return Config.PIZZA.MAX_LEVEL
+	end
+	return Config.MAX_BUILDING_LEVEL
+end
+
 -- Запуск ракеты: игрок подходит к своей установке и удерживает E, после чего камера
 -- сразу переносится к вражеским островам (без бокового меню, см. HudManager).
 -- Сервер независимо проверяет, что стрелок реально стоит рядом со своей установкой.
@@ -75,7 +96,8 @@ Config.LAUNCH_MAX_DISTANCE = 30
 
 Config.FARM_TYPES = {
 	[1] = {
-		name = "Пляжный дом",
+		-- Бывший «Пляжный дом»: теперь это ПИЦЦЕРИЯ с Blender-мешами 5 уровней.
+		name = "Пиццерия",
 		cost = 100,
 		income = 15,
 		maxHp = 120,
