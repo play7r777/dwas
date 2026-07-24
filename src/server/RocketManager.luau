@@ -247,12 +247,9 @@ local function refreshPads(player)
 	local count = DataManager.GetLauncherCount(player)
 	for index = 1, Config.MAX_LAUNCHERS do
 		if index <= count then
+			-- Потолка прокачки нет: круг всегда предлагает следующий уровень.
 			local level = DataManager.GetLauncherLevel(player, index)
-			if level >= Config.MAX_ROCKET_LEVEL then
-				PlotManager.SetRocketPadState(plotId, index, "max", string.format("Ракета ур.%d\nМАКС. УРОВЕНЬ", level))
-			else
-				PlotManager.SetRocketPadState(plotId, index, "upgrade", string.format("Прокачка ур.%d → %d\n$%d", level, level + 1, Config.RocketUpgradeCost(level + 1)))
-			end
+			PlotManager.SetRocketPadState(plotId, index, "upgrade", string.format("Прокачка ур.%d → %d\n$%d", level, level + 1, Config.RocketUpgradeCost(level + 1)))
 		elseif index == count + 1 then
 			PlotManager.SetRocketPadState(plotId, index, "buy", string.format("Купить ракету %d\n$%d", index, Config.LAUNCHER_COSTS[index]))
 		else
@@ -276,9 +273,8 @@ local function onPadStep(player, index)
 	local count = DataManager.GetLauncherCount(player)
 
 	if index <= count then
-		-- ПРОКАЧКА
+		-- ПРОКАЧКА (потолка нет — качается до бесконечности)
 		local level = DataManager.GetLauncherLevel(player, index)
-		if level >= Config.MAX_ROCKET_LEVEL then return end
 		-- Защита от тупика: пока нет ни одной фармилки, нельзя спустить на
 		-- прокачку деньги, отложенные на Пиццерию (иначе доход не появится никогда).
 		local canSpend, reason = FarmManager.CanSpendKeepingReserve(player, Config.RocketUpgradeCost(level + 1))

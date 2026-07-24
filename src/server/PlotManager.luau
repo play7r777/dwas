@@ -470,11 +470,14 @@ local function buildIslandModel(plotId, position)
 
 	-- Спавн НЕВИДИМ: раньше это был "второй квадрат песка", плававший над пляжем
 	-- рядом с ракетой. Точка респавна работает, но геометрии больше не видно.
+	-- Точка (0, 16): северный центр газона — пиццерия и кафе теперь прижаты к
+	-- южному краю и смотрят фасадами на север, игрок спавнится ЛИЦОМ к ним и
+	-- их кнопкам (старая точка (0, 40) оказалась бы внутри кафе).
 	local spawn = Instance.new("SpawnLocation")
 	spawn.Name = "PlotSpawn"
 	spawn.Anchored = true
 	spawn.Size = Vector3.new(6, 1, 6)
-	spawn.Position = position + Vector3.new(0, SURFACE_OFFSET + 1.05, 40)
+	spawn.Position = position + Vector3.new(0, SURFACE_OFFSET + 1.05, 16)
 	spawn.Transparency = 1
 	spawn.CanCollide = false
 	spawn.Neutral = false

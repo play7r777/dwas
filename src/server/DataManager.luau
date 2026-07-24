@@ -38,7 +38,8 @@ local function load(player)
 		local savedLevels = type(saved.rocketLevels) == "table" and saved.rocketLevels or {}
 		data.rocketLevels = {}
 		for index = 1, data.launchers do
-			data.rocketLevels[index] = math.clamp(tonumber(savedLevels[index]) or 1, 1, Config.MAX_ROCKET_LEVEL)
+			-- Потолка прокачки больше нет: сверху не зажимаем (только снизу).
+			data.rocketLevels[index] = math.max(tonumber(savedLevels[index]) or 1, 1)
 		end
 		data.airDefense = math.clamp(tonumber(saved.airDefense) or 0, 0, Config.AIR_DEFENSE.MAX_LEVEL)
 	end
@@ -160,13 +161,13 @@ function DataManager.BuyNextLauncher(player)
 	return true, nextCount
 end
 
--- Прокачка купленного стенда на +1 уровень. Возвращает (true, новыйУровень) либо (false, причина).
+-- Прокачка купленного стенда на +1 уровень (потолка нет — до бесконечности).
+-- Возвращает (true, новыйУровень) либо (false, причина).
 function DataManager.UpgradeLauncher(player, index)
 	local data = playerData[player]
 	if not data then return false, "Данные игрока загружаются" end
 	if index < 1 or index > data.launchers then return false, "Сначала купите эту установку" end
 	local level = data.rocketLevels[index] or 1
-	if level >= Config.MAX_ROCKET_LEVEL then return false, "Максимальный уровень ракеты" end
 	local cost = Config.RocketUpgradeCost(level + 1)
 	if data.money < cost then return false, string.format("Нужно ещё $%d", cost - data.money) end
 	data.money -= cost
