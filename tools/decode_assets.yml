@@ -1,0 +1,36 @@
+# Раскодирует текстуры/превью, загруженные как *.png.b64 (base64), обратно в
+# настоящие PNG и коммитит их. Нужен потому, что API-пуш умеет только текст.
+# Запускается сам при пуше в v3.3.0 или вручную (Run workflow).
+name: Decode base64 assets
+on:
+  push:
+    branches: [ "v3.3.0" ]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  decode:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Decode all .b64 files
+        id: decode
+        run: |
+          set -e
+          found=0
+          while IFS= read -r -d '' f; do
+            found=1
+            out="${f%.b64}"
+            base64 -d "$f" > "$out"
+            rm "$f"
+            echo "decoded: $out"
+          done < <(find . -name "*.b64" -print0)
+          echo "found=$found" >> "$GITHUB_OUTPUT"
+      - name: Commit decoded files
+        if: steps.decode.outputs.found == '1'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet || git commit -m "v3.3.0: decode PNG assets from .b64 (auto)"
+          git push
