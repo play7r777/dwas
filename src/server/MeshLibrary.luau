@@ -68,18 +68,23 @@ end
 -- мульти-материальный OBJ на парты с именами материалов: M_grass, M_sand...).
 -- С настоящими текстурами функция ничего не трогает.
 local FALLBACK_COLORS = {
-	{ "yellow",   Color3.fromRGB(247, 200, 20) },
-	{ "black",    Color3.fromRGB(26, 27, 29) },
-	{ "asphalt",  Color3.fromRGB(62, 64, 68) },
-	{ "sidewalk", Color3.fromRGB(206, 208, 204) },
-	{ "concrete", Color3.fromRGB(148, 150, 149) },
-	{ "grass",    Color3.fromRGB(86, 165, 54) },
-	{ "green",    Color3.fromRGB(58, 122, 38) },
-	{ "sand2",    Color3.fromRGB(226, 176, 88) },
-	{ "cliff",    Color3.fromRGB(196, 148, 70) },
-	{ "sand",     Color3.fromRGB(222, 176, 92) },
-	{ "rock",     Color3.fromRGB(88, 90, 94) },
-	{ "gray",     Color3.fromRGB(168, 170, 168) },
+	{ "marking",   Color3.fromRGB(247, 200, 20) },
+	{ "tape",      Color3.fromRGB(26, 27, 29) },
+	{ "road",      Color3.fromRGB(62, 64, 68) },
+	{ "pad",       Color3.fromRGB(148, 150, 149) },
+	{ "sand_dark", Color3.fromRGB(222, 172, 86) },
+	{ "yellow",    Color3.fromRGB(247, 200, 20) },
+	{ "black",     Color3.fromRGB(26, 27, 29) },
+	{ "asphalt",   Color3.fromRGB(62, 64, 68) },
+	{ "sidewalk",  Color3.fromRGB(206, 208, 204) },
+	{ "concrete",  Color3.fromRGB(148, 150, 149) },
+	{ "grass",     Color3.fromRGB(86, 165, 54) },
+	{ "green",     Color3.fromRGB(58, 122, 38) },
+	{ "sand2",     Color3.fromRGB(226, 176, 88) },
+	{ "cliff",     Color3.fromRGB(196, 148, 70) },
+	{ "sand",      Color3.fromRGB(222, 176, 92) },
+	{ "rock",      Color3.fromRGB(88, 90, 94) },
+	{ "gray",      Color3.fromRGB(168, 170, 168) },
 }
 
 local function paletteColor(name)
@@ -119,6 +124,47 @@ end
 --    Остров всегда выглядит как референс; теряются только точки-шипы.
 --  • useTextures = true: текстуры оставляем, только убираем тонировку
 --    (Color → белый: чёрный/тёмный Color умножается на текстуру и гасит её).
+-- === Сборка острова из ОТДЕЛЬНЫХ деталей ===
+-- Детали (island_grass, island_road, ... из assets/island/export_parts.py) —
+-- однотонные меши без текстур, экспортированные в ОБЩИХ координатах острова.
+-- piecesCfg = Config.ISLAND.PIECES / SUB_PIECES: FULL_WIDTH + LIST{name, off}.
+-- baseCF — CFrame ДНА-центра острова (с нужным yaw), targetWidth — ширина в стадах.
+-- Возвращает Model и число найденных деталей (nil, если не нашлось ни одной).
+function MeshLibrary.AssemblePieces(folderName, piecesCfg, baseCF, targetWidth, modelName)
+	local found = {}
+	for _, rec in ipairs(piecesCfg.LIST) do
+		local part = MeshLibrary.FindPart(folderName, { rec.name })
+		if part then
+			table.insert(found, { part = part, off = rec.off, name = rec.name })
+		end
+	end
+	if #found == 0 then return nil end
+
+	local s = targetWidth / piecesCfg.FULL_WIDTH
+	local model = Instance.new("Model")
+	model.Name = modelName
+	for _, rec in ipairs(found) do
+		local part = rec.part
+		part.Name = rec.name
+		part.Anchored = true
+		part.CanCollide = true
+		part.Size = part.Size * s
+		part.CFrame = baseCF * CFrame.new(rec.off * s)
+		part.Parent = model
+	end
+	model.PrimaryPart = found[1].part
+	if #found < #piecesCfg.LIST then
+		local missing = {}
+		local have = {}
+		for _, rec in ipairs(found) do have[rec.name] = true end
+		for _, rec in ipairs(piecesCfg.LIST) do
+			if not have[rec.name] then table.insert(missing, rec.name) end
+		end
+		warn("[MeshLibrary] Остров собран не полностью, не найдены детали: " .. table.concat(missing, ", "))
+	end
+	return model, #found
+end
+
 function MeshLibrary.ApplyIslandLook(root, useTextures)
 	local function fix(part)
 		if not part:IsA("BasePart") then return end

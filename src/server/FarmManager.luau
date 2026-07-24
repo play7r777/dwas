@@ -79,9 +79,22 @@ local function buildTerritory(plotId, slotIndex)
 	-- (IslandMeshes/SubIsland, см. assets/island/sub_island.py) — используем его.
 	-- Иначе процедурный фолбэк: каменный цилиндр + песчаный верх.
 	local subMesh
-	-- Понимает и «SubIsland», и имя файла «sub_island» (Import 3D), в папке
-	-- IslandMeshes, общей папке Meshes или прямо в ReplicatedStorage.
-	local subTemplate = MeshLibrary.Find(Config.ISLAND.FOLDER, { Config.ISLAND.SUB, "sub_island" })
+	-- ПРИОРИТЕТ: под-остров из отдельных однотонных деталей (sub_grass, sub_sand,
+	-- sub_sand_dark, sub_rock — без текстур), собирается по Config.ISLAND.SUB_PIECES.
+	do
+		local pc = Config.ISLAND.SUB_PIECES
+		local s = Config.ISLAND.SUB_WIDTH / pc.FULL_WIDTH
+		local baseCF = CFrame.new(center.X, center.Y + 9.5 - pc.WALK_TOP * s, center.Z)
+		local model = MeshLibrary.AssemblePieces(Config.ISLAND.FOLDER, pc, baseCF, Config.ISLAND.SUB_WIDTH, "SubIsland")
+		if model then
+			MeshLibrary.ApplyIslandLook(model, false)
+			model.Parent = territoryFolder
+			subMesh = model
+		end
+	end
+	-- Иначе: цельный sub_island (Import 3D), в папке IslandMeshes, общей папке
+	-- Meshes или прямо в ReplicatedStorage.
+	local subTemplate = if subMesh then nil else MeshLibrary.Find(Config.ISLAND.FOLDER, { Config.ISLAND.SUB, "sub_island" })
 	if subTemplate then
 		-- Import 3D мог разбить меш на несколько частей (по материалам) — работаем
 		-- с Model целиком (ScaleTo + GetBoundingBox), как у главного острова.

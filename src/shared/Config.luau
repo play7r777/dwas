@@ -126,6 +126,37 @@ Config.ISLAND = {
 	-- (свежезалитые текстуры Roblox может отдавать чёрными, пока обрабатывает).
 	-- true: оставить текстуры (шипы-точки), Color отбеливается.
 	USE_TEXTURES = false,
+
+	-- ОСТРОВ ПО ДЕТАЛЯМ (рекомендуемый путь): отдельные однотонные меши БЕЗ
+	-- текстур (assets/island/export_parts.py) — импортируются как пальмы, по
+	-- одному файлу, и собираются игрой по этим смещениям (юниты меша; origin =
+	-- центр острова на дне, Y вверх). Если детали лежат в ReplicatedStorage —
+	-- они В ПРИОРИТЕТЕ над цельным main_island.
+	PIECES = {
+		FULL_WIDTH = 258.51, -- полная ширина по деталям (для масштаба)
+		WALK_TOP = 27.70,    -- высота ходибельной поверхности (верх зелёной плиты)
+		LIST = {
+			{ name = "island_grass",     off = Vector3.new(-1.253, 27.225, 2.739) },
+			{ name = "island_sand",      off = Vector3.new(0.000, 23.174, 0.000) },
+			{ name = "island_sand_dark", off = Vector3.new(3.261, 16.174, -2.448) },
+			{ name = "island_rock",      off = Vector3.new(-1.253, 2.500, 2.739) },
+			{ name = "island_road",      off = Vector3.new(-1.253, 27.630, 2.739) },
+			{ name = "island_sidewalk",  off = Vector3.new(-1.253, 27.700, 2.739) },
+			{ name = "island_pad",       off = Vector3.new(40.247, 27.950, 2.739) },
+			{ name = "island_marking",   off = Vector3.new(-1.253, 27.910, 2.739) },
+			{ name = "island_tape",      off = Vector3.new(40.247, 27.760, 2.739) },
+		},
+	},
+	SUB_PIECES = {
+		FULL_WIDTH = 66.79,
+		WALK_TOP = 15.55,
+		LIST = {
+			{ name = "sub_grass",     off = Vector3.new(0.000, 14.950, -0.397) },
+			{ name = "sub_sand",      off = Vector3.new(0.000, 12.096, 0.000) },
+			{ name = "sub_sand_dark", off = Vector3.new(0.747, 9.596, 0.591) },
+			{ name = "sub_rock",      off = Vector3.new(0.000, 2.000, -0.397) },
+		},
+	},
 }
 
 -- ЛЕГО-ПАЛЬМЫ из Blender (assets/palm_trees): ровно ДВЕ пальмы на главном

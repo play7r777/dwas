@@ -154,6 +154,23 @@ end
 -- зелёная стад-плита, дорога с пунктиром, газон и зона ракет с чёрно-жёлтой
 -- лентой. Иначе фолбэк: вложенные сплошные цилиндры (никаких перекрывающихся
 -- копланарных партов → нет "дрожащего песка"/z-fighting).
+-- ПРИОРИТЕТНЫЙ путь: остров из ОТДЕЛЬНЫХ однотонных деталей (island_grass,
+-- island_road, ... — см. assets/island/export_parts.py). Без текстур — нечему
+-- зависать в обработке Roblox; собирается по смещениям из Config.ISLAND.PIECES.
+local function tryBuildIslandPieces(folder, position)
+	local pc = Config.ISLAND.PIECES
+	local s = Config.ISLAND.MAIN_WIDTH / pc.FULL_WIDTH
+	local baseCF = CFrame.new(position.X, position.Y + SURFACE_OFFSET - pc.WALK_TOP * s, position.Z)
+		* CFrame.Angles(0, math.rad(Config.ISLAND.YAW), 0)
+	local model, count = MeshLibrary.AssemblePieces(Config.ISLAND.FOLDER, pc, baseCF, Config.ISLAND.MAIN_WIDTH, "MainIsland")
+	if not model then return nil end
+	-- Детали и так однотонные; страховка докрашивает по именам на всякий случай.
+	MeshLibrary.ApplyIslandLook(model, false)
+	model.Parent = folder
+	print(string.format("[PlotManager] Остров собран из %d деталей", count))
+	return model
+end
+
 local function tryBuildIslandMesh(folder, position)
 	-- Понимает и «MainIsland», и имя файла «main_island» (Import 3D), в папке
 	-- IslandMeshes, общей папке Meshes или прямо в ReplicatedStorage.
@@ -213,7 +230,8 @@ end
 local function buildIslandBase(folder, position, sandColor)
 	local sandRadius = Config.PLOT_CENTER_SIZE * 0.64
 
-	local islandMesh = tryBuildIslandMesh(folder, position)
+	-- 1) детали (island_grass, island_road, ...) → 2) цельный main_island → 3) фолбэк
+	local islandMesh = tryBuildIslandPieces(folder, position) or tryBuildIslandMesh(folder, position)
 	if islandMesh then
 		return islandMesh, sandRadius
 	end
