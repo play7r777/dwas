@@ -111,8 +111,9 @@ local function buildTerritory(plotId, slotIndex)
 			local bbCF, bb2 = model:GetBoundingBox()
 			-- Верх меша (газон) на уровне песка площадки: center.Y + 9.5
 			model:TranslateBy(Vector3.new(center.X, center.Y + 9.5 - bb2.Y / 2, center.Z) - bbCF.Position)
-			-- Если импортировали без текстур — красим запасными цветами
-			MeshLibrary.ApplyFallbackColors(model)
+			-- Гарантированный вид: плоские лего-цвета вместо текстур (см.
+			-- Config.ISLAND.USE_TEXTURES — свежие текстуры Roblox отдаёт чёрными)
+			MeshLibrary.ApplyIslandLook(model, Config.ISLAND.USE_TEXTURES)
 			model.Parent = territoryFolder
 			subMesh = model
 		elseif model then

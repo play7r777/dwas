@@ -82,17 +82,24 @@ local FALLBACK_COLORS = {
 	{ "gray",     Color3.fromRGB(168, 170, 168) },
 }
 
+local function paletteColor(name)
+	name = string.lower(name)
+	for _, entry in ipairs(FALLBACK_COLORS) do
+		if string.find(name, entry[1], 1, true) then
+			return entry[2]
+		end
+	end
+	return nil
+end
+
 function MeshLibrary.ApplyFallbackColors(root)
 	local function paint(part)
 		if not part:IsA("MeshPart") then return end
 		if part.TextureID ~= nil and part.TextureID ~= "" then return end
-		local name = string.lower(part.Name)
-		for _, entry in ipairs(FALLBACK_COLORS) do
-			if string.find(name, entry[1], 1, true) then
-				part.Color = entry[2]
-				part.Material = Enum.Material.SmoothPlastic
-				return
-			end
+		local color = paletteColor(part.Name)
+		if color then
+			part.Color = color
+			part.Material = Enum.Material.SmoothPlastic
 		end
 	end
 	if root:IsA("BasePart") then
@@ -100,6 +107,41 @@ function MeshLibrary.ApplyFallbackColors(root)
 	else
 		for _, part in ipairs(root:GetDescendants()) do
 			paint(part)
+		end
+	end
+end
+
+-- === Гарантированный вид ОСТРОВОВ ===
+-- Свежезалитые текстуры Roblox может отдавать ЧЁРНЫМИ (обработка/модерация) —
+-- остров в игре стоял чёрным при живых текстурах в превью импорта. Поэтому:
+--  • useTextures = false (дефолт): СРЕЗАЕМ текстуры с частей острова и красим
+--    плоскими лего-цветами по имени материала (M_grass → зелёный, ...).
+--    Остров всегда выглядит как референс; теряются только точки-шипы.
+--  • useTextures = true: текстуры оставляем, только убираем тонировку
+--    (Color → белый: чёрный/тёмный Color умножается на текстуру и гасит её).
+function MeshLibrary.ApplyIslandLook(root, useTextures)
+	local function fix(part)
+		if not part:IsA("BasePart") then return end
+		local color = paletteColor(part.Name)
+		if useTextures then
+			part.Color = Color3.new(1, 1, 1) -- текстура без тонировки
+			return
+		end
+		if part:IsA("MeshPart") then
+			part.TextureID = ""
+		end
+		local sa = part:FindFirstChildOfClass("SurfaceAppearance")
+		if sa then sa:Destroy() end
+		if color then
+			part.Color = color
+		end
+		part.Material = Enum.Material.SmoothPlastic
+	end
+	if root:IsA("BasePart") then
+		fix(root)
+	else
+		for _, part in ipairs(root:GetDescendants()) do
+			fix(part)
 		end
 	end
 end

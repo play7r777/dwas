@@ -198,9 +198,10 @@ local function tryBuildIslandMesh(folder, position)
 	local bbCF, bbSize2 = model:GetBoundingBox()
 	local desired = Vector3.new(position.X, position.Y + SURFACE_OFFSET - bbSize2.Y / 2, position.Z)
 	model:TranslateBy(desired - bbCF.Position)
-	-- Если меши импортировали без текстур (белые) — красим парты запасными
-	-- цветами по имени материала, остров всё равно выглядит правильно.
-	MeshLibrary.ApplyFallbackColors(model)
+	-- Гарантированный вид: по умолчанию срезаем текстуры и красим части
+	-- плоскими лего-цветами по именам материалов (см. Config.ISLAND.USE_TEXTURES —
+	-- свежезалитые текстуры Roblox может отдавать чёрными).
+	MeshLibrary.ApplyIslandLook(model, Config.ISLAND.USE_TEXTURES)
 	model.Parent = folder
 	return model
 end
