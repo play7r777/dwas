@@ -11,6 +11,7 @@ local Config            = require(sharedFolder:WaitForChild("Config"))
 local Remotes           = require(sharedFolder:WaitForChild("Remotes"))
 local DataManager       = require(script.Parent:WaitForChild("DataManager"))
 local PlotManager       = require(script.Parent:WaitForChild("PlotManager"))
+local MeshLibrary       = require(script.Parent:WaitForChild("MeshLibrary"))
 
 local FarmManager = {}
 
@@ -78,8 +79,9 @@ local function buildTerritory(plotId, slotIndex)
 	-- (IslandMeshes/SubIsland, см. assets/island/sub_island.py) — используем его.
 	-- Иначе процедурный фолбэк: каменный цилиндр + песчаный верх.
 	local subMesh
-	local meshFolder = ReplicatedStorage:FindFirstChild(Config.ISLAND.FOLDER)
-	local subTemplate = meshFolder and meshFolder:FindFirstChild(Config.ISLAND.SUB)
+	-- Понимает и «SubIsland», и имя файла «sub_island» (Import 3D), в папке
+	-- IslandMeshes, общей папке Meshes или прямо в ReplicatedStorage.
+	local subTemplate = MeshLibrary.Find(Config.ISLAND.FOLDER, { Config.ISLAND.SUB, "sub_island" })
 	if subTemplate then
 		-- Import 3D мог разбить меш на несколько частей (по материалам) — работаем
 		-- с Model целиком (ScaleTo + GetBoundingBox), как у главного острова.
@@ -225,20 +227,13 @@ local MESH_BUILDINGS = {
 }
 
 local function tryBuildLevelMesh(meshCfg, plot, slotIndex, level, territoryFolder)
-	local meshFolder = ReplicatedStorage:FindFirstChild(meshCfg.FOLDER)
-	if not meshFolder then return nil end
 	local visLevel = math.clamp(level, 1, meshCfg.MAX_LEVEL)
-	local template = meshFolder:FindFirstChild("Level" .. visLevel)
-	if not template then return nil end
-
-	-- Import 3D мог создать и голый MeshPart, и Model-обёртку — достаём меш.
-	local meshPart
-	if template:IsA("BasePart") then
-		meshPart = template:Clone()
-	elseif template:IsA("Model") then
-		local inner = template:FindFirstChildWhichIsA("MeshPart", true) or template:FindFirstChildWhichIsA("BasePart", true)
-		if inner then meshPart = inner:Clone() end
-	end
+	-- Понимает и «LevelN» (старый способ), и имя файла после Import 3D
+	-- («pizza_shop_lvlN» / «cafe_lvlN») — переименовывать ничего не нужно.
+	local meshPart = MeshLibrary.FindPart(meshCfg.FOLDER, {
+		"Level" .. visLevel,
+		(meshCfg.FILE_PREFIX or "") .. visLevel,
+	})
 	if not meshPart then return nil end
 
 	local model = Instance.new("Model")

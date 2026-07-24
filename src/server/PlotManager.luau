@@ -10,6 +10,7 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local sharedFolder      = ReplicatedStorage:WaitForChild("Shared", 10)
 local Config            = require(sharedFolder:WaitForChild("Config"))
 local RocketFactory     = require(script.Parent:WaitForChild("RocketFactory"))
+local MeshLibrary       = require(script.Parent:WaitForChild("MeshLibrary"))
 
 local PlotManager = {}
 
@@ -154,8 +155,9 @@ end
 -- лентой. Иначе фолбэк: вложенные сплошные цилиндры (никаких перекрывающихся
 -- копланарных партов → нет "дрожащего песка"/z-fighting).
 local function tryBuildIslandMesh(folder, position)
-	local meshFolder = ReplicatedStorage:FindFirstChild(Config.ISLAND.FOLDER)
-	local template = meshFolder and meshFolder:FindFirstChild(Config.ISLAND.MAIN)
+	-- Понимает и «MainIsland», и имя файла «main_island» (Import 3D), в папке
+	-- IslandMeshes, общей папке Meshes или прямо в ReplicatedStorage.
+	local template = MeshLibrary.Find(Config.ISLAND.FOLDER, { Config.ISLAND.MAIN, "main_island" })
 	if not template then return nil end
 
 	-- Import 3D мог разбить остров на НЕСКОЛЬКО MeshPart (по материалам) внутри
@@ -298,22 +300,13 @@ end
 -- Декор острова: РОВНО ДВЕ пальмы (не преувеличиваем). Blender-меши PalmA и
 -- PalmB смотрят в разные стороны (ReplicatedStorage/PalmMeshes, см.
 -- assets/palm_trees); пока мешей нет — две процедурные пальмы с разными яу.
-local function tryPlacePalmMesh(decor, name, basePos, yawDeg)
-	local meshFolder = ReplicatedStorage:FindFirstChild(Config.PALMS.FOLDER)
-	local template = meshFolder and meshFolder:FindFirstChild(name)
-	if not template then return nil end
-
-	local meshPart
-	if template:IsA("BasePart") then
-		meshPart = template:Clone()
-	elseif template:IsA("Model") then
-		local inner = template:FindFirstChildWhichIsA("MeshPart", true) or template:FindFirstChildWhichIsA("BasePart", true)
-		if inner then meshPart = inner:Clone() end
-	end
+local function tryPlacePalmMesh(decor, spot, basePos, yawDeg)
+	-- Понимает и «PalmA/PalmB», и имена файлов «palm_a/palm_b» (Import 3D).
+	local meshPart = MeshLibrary.FindPart(Config.PALMS.FOLDER, { spot.name, spot.file })
 	if not meshPart then return nil end
 
 	local scale = Config.PALMS.HEIGHT / math.max(meshPart.Size.Y, 0.001)
-	meshPart.Name = name
+	meshPart.Name = spot.name
 	meshPart.Size = meshPart.Size * scale
 	meshPart.Anchored = true
 	meshPart.CanCollide = true
@@ -330,7 +323,7 @@ local function buildIslandDecor(parent, position, plotId)
 
 	for _, spot in ipairs(Config.PALMS.SPOTS) do
 		local basePos = position + Vector3.new(spot.offset.X, SURFACE_OFFSET, spot.offset.Z)
-		if not tryPlacePalmMesh(decor, spot.name, basePos, spot.yaw) then
+		if not tryPlacePalmMesh(decor, spot, basePos, spot.yaw) then
 			-- Фолбэк: процедурная пальма (яу разные — «смотрят в разные стороны»)
 			buildPalm(decor, basePos, spot.yaw, 1.1)
 		end

@@ -23,6 +23,7 @@ local Remotes       = require(sharedFolder:WaitForChild("Remotes"))
 local DataManager   = require(script.Parent:WaitForChild("DataManager"))
 local PlotManager   = require(script.Parent:WaitForChild("PlotManager"))
 local RocketManager = require(script.Parent:WaitForChild("RocketManager"))
+local MeshLibrary   = require(script.Parent:WaitForChild("MeshLibrary"))
 
 local AirDefenseManager = {}
 
@@ -75,27 +76,13 @@ end
 -- Сборка турели
 -- ============================================================
 
--- Достаёт BasePart из ReplicatedStorage/<FOLDER>/<name> (Import 3D мог создать
--- и голый MeshPart, и Model-обёртку).
-local function findMeshTemplate(folderName, name)
-	local folder = ReplicatedStorage:FindFirstChild(folderName)
-	if not folder then return nil end
-	local template = folder:FindFirstChild(name)
-	if not template then return nil end
-	if template:IsA("BasePart") then
-		return template
-	end
-	if template:IsA("Model") then
-		return template:FindFirstChildWhichIsA("MeshPart", true) or template:FindFirstChildWhichIsA("BasePart", true)
-	end
-	return nil
-end
-
 -- Турель из Blender-мешей: три части (Base/Head/Barrels) с пивотами из Config.
+-- Понимает и «Base/Head/Barrels», и имена файлов после Import 3D
+-- («air_defense_base/head/barrels») — переименовывать не нужно.
 local function tryBuildMeshTurret(model, basePos, restAim)
-	local baseT = findMeshTemplate(AD.FOLDER, "Base")
-	local headT = findMeshTemplate(AD.FOLDER, "Head")
-	local barrT = findMeshTemplate(AD.FOLDER, "Barrels")
+	local baseT = MeshLibrary.FindPart(AD.FOLDER, { "Base", "air_defense_base" })
+	local headT = MeshLibrary.FindPart(AD.FOLDER, { "Head", "air_defense_head" })
+	local barrT = MeshLibrary.FindPart(AD.FOLDER, { "Barrels", "air_defense_barrels" })
 	if not (baseT and headT and barrT) then return nil end
 
 	local M = AD.MESH
@@ -103,7 +90,7 @@ local function tryBuildMeshTurret(model, basePos, restAim)
 	-- Меши смотрят по +Z детали, а бою нужен -Z (LookVector): доворот на 180°.
 	local FLIP = CFrame.Angles(0, math.pi, 0)
 
-	local base = baseT:Clone()
+	local base = baseT -- FindPart уже вернул клон
 	base.Anchored = true
 	base.CanCollide = true
 	base.Size = base.Size * s
@@ -114,14 +101,14 @@ local function tryBuildMeshTurret(model, basePos, restAim)
 	local pivotPos = basePos + Vector3.new(0, M.HEAD_PIVOT_Z * s, 0)
 	local A0 = CFrame.lookAt(pivotPos, pivotPos + restAim)
 
-	local head = headT:Clone()
+	local head = headT -- клон из FindPart
 	head.Anchored = true
 	head.CanCollide = false
 	head.Size = head.Size * s
 	head.CFrame = A0 * FLIP * CFrame.new(M.HEAD_BB * s)
 	head.Parent = model
 
-	local barrels = barrT:Clone()
+	local barrels = barrT -- клон из FindPart
 	barrels.Anchored = true
 	barrels.CanCollide = false
 	barrels.Size = barrels.Size * s

@@ -77,6 +77,7 @@ Config.UPGRADE_COST_MULT = 1.6
 Config.PIZZA = {
 	MAX_LEVEL = 5,
 	FOLDER = "PizzaShopMeshes",
+	FILE_PREFIX = "pizza_shop_lvl", -- имя файла = имя после Import 3D (переименовывать не надо)
 	WIDTH = 24,  -- ширина здания в стадах (меш масштабируется пропорционально)
 	-- Доворот меша. Фасад OBJ после импорта смотрит по +Z детали, а CFrame.lookAt
 	-- целит -Z (LookVector) на центр острова. YAW = 0 → фасад смотрит ВНУТРЬ
@@ -91,6 +92,7 @@ Config.PIZZA = {
 Config.CAFE = {
 	MAX_LEVEL = 5,
 	FOLDER = "CafeMeshes",
+	FILE_PREFIX = "cafe_lvl", -- имя файла = имя после Import 3D (переименовывать не надо)
 	WIDTH = 26,
 	YAW = 0, -- как у пиццерии: фасад внутрь острова
 }
@@ -127,9 +129,10 @@ Config.ISLAND = {
 Config.PALMS = {
 	FOLDER = "PalmMeshes",
 	HEIGHT = 24, -- высота пальмы в стадах
+	-- name — «красивое» имя, file — имя после Import 3D (подходят оба)
 	SPOTS = {
-		{ name = "PalmA", offset = Vector3.new(-58, 0, 46), yaw = 15 },
-		{ name = "PalmB", offset = Vector3.new(52, 0, 62), yaw = 205 },
+		{ name = "PalmA", file = "palm_a", offset = Vector3.new(-58, 0, 46), yaw = 15 },
+		{ name = "PalmB", file = "palm_b", offset = Vector3.new(52, 0, 62), yaw = 205 },
 	},
 }
 
