@@ -80,7 +80,9 @@ end
 -- Турель из Blender-мешей: три части (Base/Head/Barrels) с пивотами из Config.
 -- Понимает и «Base/Head/Barrels», и имена файлов после Import 3D
 -- («air_defense_base/head/barrels») — переименовывать не нужно.
-local function tryBuildMeshTurret(model, basePos, restAim)
+-- outDir — горизонтальное «лицо» ОСНОВАНИЯ (к морю), restAim — дежурное
+-- направление башни/стволов (почти вертикально вверх, см. buildTurret).
+local function tryBuildMeshTurret(model, basePos, outDir, restAim)
 	local baseT = MeshLibrary.FindPart(AD.FOLDER, { "Base", "air_defense_base" })
 	local headT = MeshLibrary.FindPart(AD.FOLDER, { "Head", "air_defense_head" })
 	local barrT = MeshLibrary.FindPart(AD.FOLDER, { "Barrels", "air_defense_barrels" })
@@ -95,7 +97,7 @@ local function tryBuildMeshTurret(model, basePos, restAim)
 	base.Anchored = true
 	base.CanCollide = true
 	base.Size = base.Size * s
-	local baseA = CFrame.lookAt(basePos, basePos + restAim) * FLIP
+	local baseA = CFrame.lookAt(basePos, basePos + outDir) * FLIP
 	base.CFrame = baseA * CFrame.new(M.BASE_BB * s)
 	base.Parent = model
 
@@ -104,14 +106,16 @@ local function tryBuildMeshTurret(model, basePos, restAim)
 
 	local head = headT -- клон из FindPart
 	head.Anchored = true
-	head.CanCollide = false
+	-- Сквозь башню и стволы больше НЕ пройти: раньше CanCollide=false, и игрок
+	-- проходил сквозь верхнюю крышку и дуло, как сквозь призрака.
+	head.CanCollide = true
 	head.Size = head.Size * s
 	head.CFrame = A0 * FLIP * CFrame.new(M.HEAD_BB * s)
 	head.Parent = model
 
 	local barrels = barrT -- клон из FindPart
 	barrels.Anchored = true
-	barrels.CanCollide = false
+	barrels.CanCollide = true
 	barrels.Size = barrels.Size * s
 	local barrelPivotOff = FLIP * CFrame.new(M.BARREL_PIVOT * s)
 	local bp0 = A0 * barrelPivotOff
@@ -129,7 +133,8 @@ local function tryBuildMeshTurret(model, basePos, restAim)
 end
 
 -- Процедурный фолбэк: та же турель из обычных партов (пропорции Blender-модели).
-local function buildProceduralTurret(model, basePos, restAim)
+-- outDir — «лицо» основания (горизонталь), restAim — дежурный наклон башни.
+local function buildProceduralTurret(model, basePos, outDir, restAim)
 	local sp = AD.HEIGHT / 11.6
 	local GRAPHITE = Color3.fromRGB(30, 32, 35)
 	local STEEL = Color3.fromRGB(122, 127, 132)
@@ -144,8 +149,8 @@ local function buildProceduralTurret(model, basePos, restAim)
 		CFrame.new(up(1.2)) * CFrame.Angles(0, 0, math.rad(90)), GRAPHITE, Enum.Material.Metal, true)
 	drum.Shape = Enum.PartType.Cylinder
 	makePart(model, "Pedestal", Vector3.new(6.2, 3.6, 6.2) * sp, CFrame.new(up(4.5)), STEEL, Enum.Material.DiamondPlate, true)
-	makePart(model, "TrimF", Vector3.new(6.5, 0.4, 0.5) * sp, CFrame.new(up(6.1) + restAim * (3.0 * sp)), YELLOW, Enum.Material.SmoothPlastic)
-	makePart(model, "TrimB", Vector3.new(6.5, 0.4, 0.5) * sp, CFrame.new(up(6.1) - restAim * (3.0 * sp)), YELLOW, Enum.Material.SmoothPlastic)
+	makePart(model, "TrimF", Vector3.new(6.5, 0.4, 0.5) * sp, CFrame.new(up(6.1) + outDir * (3.0 * sp)), YELLOW, Enum.Material.SmoothPlastic)
+	makePart(model, "TrimB", Vector3.new(6.5, 0.4, 0.5) * sp, CFrame.new(up(6.1) - outDir * (3.0 * sp)), YELLOW, Enum.Material.SmoothPlastic)
 	local ring = makePart(model, "Ring", Vector3.new(0.7, 5.6, 5.6) * sp,
 		CFrame.new(up(6.45)) * CFrame.Angles(0, 0, math.rad(90)), GRAPHITE, Enum.Material.Metal)
 	ring.Shape = Enum.PartType.Cylinder
@@ -154,8 +159,10 @@ local function buildProceduralTurret(model, basePos, restAim)
 	local A0 = CFrame.lookAt(pivotPos, pivotPos + restAim)
 	local headParts = {}
 
+	-- Башня и стволы КОЛЛИЗИОННЫ: раньше сквозь верхнюю крышку и дуло можно
+	-- было пройти насквозь (canCollide по умолчанию false).
 	local function headPart(name, size, offCF, color, material, shape)
-		local part = makePart(model, name, size, A0 * offCF, color, material)
+		local part = makePart(model, name, size, A0 * offCF, color, material, true)
 		if shape then part.Shape = shape end
 		table.insert(headParts, { part = part, off = offCF })
 		return part
@@ -178,7 +185,7 @@ local function buildProceduralTurret(model, basePos, restAim)
 	local BARREL_LEN = 6.6 * sp
 
 	local function barrelPart(name, size, offCF, color, material, shape)
-		local part = makePart(model, name, size, bp0 * offCF, color, material)
+		local part = makePart(model, name, size, bp0 * offCF, color, material, true)
 		if shape then part.Shape = shape end
 		table.insert(barrelParts, { part = part, off = offCF })
 		return part
@@ -219,11 +226,16 @@ local function buildTurret(plotId, player, level)
 	model.Parent = plot.folder
 
 	local basePos = plot.center + AD.OFFSET + Vector3.new(0, SURFACE_OFFSET, 0)
-	-- В покое смотрим от центра острова наружу (в сторону моря).
+	-- Основание смотрит от центра острова наружу (в сторону моря).
 	local flat = Vector3.new(AD.OFFSET.X, 0, AD.OFFSET.Z)
-	local restAim = flat.Magnitude > 0.001 and flat.Unit or Vector3.new(0, 0, 1)
+	local outDir = flat.Magnitude > 0.001 and flat.Unit or Vector3.new(0, 0, 1)
+	-- ПОЗА ПОКОЯ: башня и стволы задраны ПОЧТИ ВЕРТИКАЛЬНО (~71°) с лёгким
+	-- наклоном к морю — «дежурное» положение по центру. При стрельбе голова и
+	-- дуло доворачиваются ТОЧНО на цель (aimDir в engagementLoop), после боя
+	-- плавно возвращаются в это положение.
+	local restAim = (outDir * 0.35 + Vector3.new(0, 1, 0)).Unit
 
-	local rig = tryBuildMeshTurret(model, basePos, restAim) or buildProceduralTurret(model, basePos, restAim)
+	local rig = tryBuildMeshTurret(model, basePos, outDir, restAim) or buildProceduralTurret(model, basePos, outDir, restAim)
 	model.PrimaryPart = rig.primary
 
 	-- Звук очереди (переиспользуем один Sound на турель).
@@ -352,6 +364,8 @@ local function buildPad(plotId)
 	pad.Transparency = 1
 	pad.CanCollide = false
 	pad.Parent = plot.folder
+	-- Прижимаем блин к фактической поверхности газона (не висит над землёй).
+	PlotManager.SnapPadToSurface(pad)
 
 	local billboard = Instance.new("BillboardGui")
 	billboard.Name = "PriceTag"
@@ -389,8 +403,44 @@ local function buildPad(plotId)
 end
 
 -- ============================================================
--- Стрельба
+-- Стрельба: НАСТОЯЩИЕ ПУЛИ
 -- ============================================================
+-- Из дула вылетают видимые трассеры и ЛЕТЯТ до цели (а не мгновенный луч).
+-- Судьба выстрела решается броском кости В МОМЕНТ выстрела:
+--   • попадание — пуля с лёгким самонаведением ДОГОНЯЕТ ракету и подрывает
+--     её в воздухе (rocket.shotDown, взрыв рисует RocketManager);
+--   • промах — пуля целится в точку РЯДОМ с ракетой и честно улетает мимо,
+--     в небо/море, где тихо исчезает.
+-- Меш пули: assets/air_defense/bullet.obj (Import 3D → «bullet», нос по +Y,
+-- как у ракет). Пока меша нет — неоновый цилиндр-трассер.
+
+local activeBullets = {}
+
+local function makeBulletPart()
+	local B = AD.BULLET
+	local part = MeshLibrary.FindPart(AD.FOLDER, B.FILES)
+	local orient
+	if part then
+		local long = math.max(part.Size.X, part.Size.Y, part.Size.Z, 0.001)
+		part.Size = part.Size * (B.LENGTH / long)
+		-- Нос меша (+Y) разворачиваем вперёд по полёту (-Z), как у ракет.
+		orient = CFrame.Angles(math.rad(-90), 0, 0)
+	else
+		part = Instance.new("Part")
+		part.Shape = Enum.PartType.Cylinder
+		part.Size = Vector3.new(B.LENGTH, 0.5, 0.5)
+		-- Цилиндр лежит вдоль X: кладём его вдоль направления полёта (-Z).
+		orient = CFrame.Angles(0, math.rad(90), 0)
+	end
+	part.Name = "ADBullet"
+	part.Anchored = true
+	part.CanCollide = false
+	part.CanQuery = false
+	part.CastShadow = false
+	part.Material = Enum.Material.Neon
+	part.Color = Color3.fromRGB(255, 208, 84)
+	return part, orient
+end
 
 local function fire(unit, rocket)
 	unit.nextShotAt = os.clock() + AD.FIRE_INTERVAL[math.clamp(unit.level, 1, #AD.FIRE_INTERVAL)]
@@ -399,36 +449,41 @@ local function fire(unit, rocket)
 	local barrelCF = aimCF * unit.barrelPivotOff * CFrame.Angles(0, 0, unit.spin)
 	local muzzlePos = (barrelCF * CFrame.new(unit.muzzleOff)).Position
 
-	-- Бросок кости: попали или промазали.
+	-- Бросок кости: попали или промазали (шанс растёт с уровнем, 30%..60%).
 	local hit = math.random() < AD.HIT_CHANCE[math.clamp(unit.level, 1, #AD.HIT_CHANCE)]
-	local targetPos
+
+	local dir
 	if hit then
-		targetPos = rocket.pos
+		dir = (rocket.pos - muzzlePos).Unit
 	else
-		targetPos = rocket.pos + Vector3.new(
-			(math.random() - 0.5) * 22,
-			(math.random() - 0.5) * 16,
-			(math.random() - 0.5) * 22
+		-- Промах: берём точку заметно СБОКУ/ВЫШЕ ракеты и стреляем туда.
+		local missAt = rocket.pos + Vector3.new(
+			(math.random() - 0.5) * 30,
+			math.random() * 14 + 4,
+			(math.random() - 0.5) * 30
 		)
+		dir = (missAt - muzzlePos).Unit
 	end
 
-	-- Трассер: тонкий неоновый луч от дула к точке (живёт мгновение).
-	local dist = (targetPos - muzzlePos).Magnitude
-	local tracer = Instance.new("Part")
-	tracer.Anchored = true
-	tracer.CanCollide = false
-	tracer.Material = Enum.Material.Neon
-	tracer.Color = Color3.fromRGB(255, 214, 70)
-	tracer.Size = Vector3.new(0.3, 0.3, dist)
-	tracer.CFrame = CFrame.lookAt(muzzlePos, targetPos) * CFrame.new(0, 0, -dist / 2)
-	tracer.Parent = workspace
-	Debris:AddItem(tracer, 0.07)
+	local part, orient = makeBulletPart()
+	part.CFrame = CFrame.lookAt(muzzlePos, muzzlePos + dir) * orient
+	part.Parent = workspace
+	table.insert(activeBullets, {
+		part = part,
+		orient = orient,
+		pos = muzzlePos,
+		dir = dir,
+		rocket = rocket,
+		hit = hit,
+		diesAt = os.clock() + AD.BULLET.LIFETIME,
+	})
 
 	-- Вспышка на дуле.
 	local flash = Instance.new("Part")
 	flash.Shape = Enum.PartType.Ball
 	flash.Anchored = true
 	flash.CanCollide = false
+	flash.CanQuery = false
 	flash.Material = Enum.Material.Neon
 	flash.Color = Color3.fromRGB(255, 170, 40)
 	flash.Size = Vector3.new(1.6, 1.6, 1.6)
@@ -440,21 +495,38 @@ local function fire(unit, rocket)
 		unit.sound.PlaybackSpeed = 1.45 + math.random() * 0.3
 		unit.sound:Play()
 	end
+end
 
-	if hit then
-		rocket.shotDown = true
-	else
-		-- Промах: маленькая искра рядом с ракетой (визуально понятно, что мимо).
-		local spark = Instance.new("Part")
-		spark.Shape = Enum.PartType.Ball
-		spark.Anchored = true
-		spark.CanCollide = false
-		spark.Material = Enum.Material.Neon
-		spark.Color = Color3.fromRGB(255, 120, 60)
-		spark.Size = Vector3.new(1.2, 1.2, 1.2)
-		spark.Position = targetPos
-		spark.Parent = workspace
-		Debris:AddItem(spark, 0.12)
+-- Шаг полёта всех пуль (вызывается из engagementLoop каждый Heartbeat).
+local function stepBullets(dt)
+	if #activeBullets == 0 then return end
+	local B = AD.BULLET
+	local now = os.clock()
+	for i = #activeBullets, 1, -1 do
+		local b = activeBullets[i]
+		local rocketAlive = b.rocket and not b.rocket.shotDown
+			and b.rocket.model and b.rocket.model.Parent
+		if b.hit and rocketAlive then
+			-- Лёгкое самонаведение: «попавшая» пуля честно догоняет ракету.
+			b.dir = (b.rocket.pos - b.pos).Unit
+		end
+		b.pos += b.dir * (B.SPEED * dt)
+
+		local finished = false
+		if b.hit and rocketAlive and (b.rocket.pos - b.pos).Magnitude <= B.HIT_RADIUS then
+			-- Догнали: ракета взрывается в воздухе (полётный цикл RocketManager).
+			b.rocket.shotDown = true
+			finished = true
+		elseif now >= b.diesAt then
+			finished = true
+		end
+
+		if finished then
+			b.part:Destroy()
+			table.remove(activeBullets, i)
+		else
+			b.part.CFrame = CFrame.lookAt(b.pos, b.pos + b.dir) * b.orient
+		end
 	end
 end
 
@@ -506,13 +578,17 @@ local function engagementLoop()
 					fire(unit, target)
 				end
 			elseif unit.spinSpeed > 0.05 or (unit.aimDir - unit.restAim).Magnitude > 0.02 then
-				-- Целей нет: стволы плавно останавливаются, башня возвращается в покой.
+				-- Целей нет: стволы плавно останавливаются, башня возвращается в
+				-- дежурную позу (почти вертикально вверх, см. restAim в buildTurret).
 				unit.spinSpeed = math.max(unit.spinSpeed - dt * 14, 0)
 				unit.spin = (unit.spin + unit.spinSpeed * dt) % (math.pi * 2)
 				unit.aimDir = unit.aimDir:Lerp(unit.restAim, math.clamp(dt * 2.5, 0, 1))
 				applyTransforms(unit)
 			end
 		end
+
+		-- Полёт пуль: попадания догоняют ракеты, промахи улетают мимо.
+		stepBullets(dt)
 	end)
 end
 

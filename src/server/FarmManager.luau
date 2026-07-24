@@ -41,6 +41,17 @@ end
 -- Генерация кусочка суши, моста и мини-городка при покупке слота
 local function buildTerritory(plotId, slotIndex)
 	local plot = PlotManager.GetPlot(plotId)
+
+	-- ГАЗОННЫЕ СЛОТЫ (пиццерия и кафе на главном острове, Config.LAWN_SLOTS):
+	-- зданию не нужны мост, под-остров, дорожка, фонари и кусты — оно стоит
+	-- прямо на траве. Возвращаем пустую папку под постройку.
+	if Config.LAWN_SLOTS[slotIndex] then
+		local lawnFolder = Instance.new("Folder")
+		lawnFolder.Name = "Territory_" .. slotIndex
+		lawnFolder.Parent = plot.folder
+		return lawnFolder
+	end
+
 	local slotInfo = plot.slots[slotIndex]
 	local center = slotInfo.center
 	local edgePos = slotInfo.edgePos
@@ -274,13 +285,21 @@ local function tryBuildLevelMesh(meshCfg, plot, slotIndex, level, territoryFolde
 	meshPart.Anchored = true
 	meshPart.CanCollide = true
 
-	-- Ставим на песок площадки ФАСАДОМ ВНУТРЬ острова (к мосту): lookAt целит
-	-- LookVector (-Z) на центр, фасад меша после импорта — +Z, YAW=0 разворачивает
-	-- его внутрь (см. Config.PIZZA.YAW).
-	local sandTop = plot.slots[slotIndex].center + Vector3.new(0, 9.5, 0)
-	local pos = Vector3.new(sandTop.X, sandTop.Y + meshPart.Size.Y / 2, sandTop.Z)
-	local lookAt = Vector3.new(plot.center.X, pos.Y, plot.center.Z)
-	meshPart.CFrame = CFrame.lookAt(pos, lookAt) * CFrame.Angles(0, math.rad(meshCfg.YAW), 0)
+	-- Опора: песок под-острова (+9.5) или ГАЗОН главного острова (+10.2 — верх
+	-- травы) для слотов из Config.LAWN_SLOTS. Фасад смотрит: на мост (к центру
+	-- острова) у под-островов, на СВОЮ ЗЕЛЁНУЮ КНОПКУ у газонных слотов
+	-- (кнопка стоит между зданием и спавном — фасад встречает игрока).
+	local lawn = Config.LAWN_SLOTS[slotIndex]
+	local baseTop = plot.slots[slotIndex].center + Vector3.new(0, lawn and 10.2 or 9.5, 0)
+	local pos = Vector3.new(baseTop.X, baseTop.Y + meshPart.Size.Y / 2, baseTop.Z)
+	local lookTarget
+	if lawn then
+		local padWorld = plot.center + lawn.padOffset
+		lookTarget = Vector3.new(padWorld.X, pos.Y, padWorld.Z)
+	else
+		lookTarget = Vector3.new(plot.center.X, pos.Y, plot.center.Z)
+	end
+	meshPart.CFrame = CFrame.lookAt(pos, lookTarget) * CFrame.Angles(0, math.rad(meshCfg.YAW), 0)
 	meshPart.Parent = model
 
 	return model, meshPart
@@ -301,9 +320,18 @@ local function buildBuildingModel(plotId, slotIndex, tier, level, territoryFolde
 		-- Мешей в ReplicatedStorage ещё нет — временно строим процедурный домик.
 	end
 
-	local slotCenter = plot.slots[slotIndex].center + Vector3.new(0, 10, 0)
-	-- Дверь/фасад дома смотрит по локальной -Z; направляем -Z на центр острова (к мосту).
-	local baseCF = CFrame.lookAt(slotCenter, Vector3.new(plot.center.X, slotCenter.Y, plot.center.Z))
+	local lawnCfg = Config.LAWN_SLOTS[slotIndex]
+	local slotCenter = plot.slots[slotIndex].center + Vector3.new(0, lawnCfg and 10.2 or 10, 0)
+	-- Дверь/фасад дома смотрит по локальной -Z: на центр острова (к мосту) у
+	-- под-островов, на свою зелёную кнопку у газонных слотов.
+	local faceTarget
+	if lawnCfg then
+		local padWorld = plot.center + lawnCfg.padOffset
+		faceTarget = Vector3.new(padWorld.X, slotCenter.Y, padWorld.Z)
+	else
+		faceTarget = Vector3.new(plot.center.X, slotCenter.Y, plot.center.Z)
+	end
+	local baseCF = CFrame.lookAt(slotCenter, faceTarget)
 
 	local style = TIER_STYLES[tier]
 	local home = Instance.new("Model")
@@ -854,12 +882,14 @@ end
 
 -- Серверный расчёт прилёта: находит здания в радиусе точки удара и наносит им
 -- урон + отключает доход. Возвращает true, если что-то было разрушено.
-function FarmManager.ApplyRocketImpact(plotId, impactPos, damage)
+-- radius — радиус поражения ЭТОЙ ракеты (растёт с уровнем стенда,
+-- см. Config.RocketImpactRadiusForLevel); без аргумента — базовый.
+function FarmManager.ApplyRocketImpact(plotId, impactPos, damage, radius)
 	local farms = plotFarms[plotId]
 	local plot = PlotManager.GetPlot(plotId)
 	if not farms or not plot then return false end
 
-	local radius = Config.Rocket.ImpactRadius
+	radius = radius or Config.Rocket.ImpactRadius
 	local anyDestroyed = false
 	for slotIndex, slotData in pairs(farms) do
 		if slotData and slotData.alive then

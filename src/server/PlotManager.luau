@@ -54,20 +54,6 @@ local function makeCylinder(parent, name, height, diameter, position, color, mat
 	return part
 end
 
-local function makeWedge(parent, name, size, cframe, color, material)
-	local part = Instance.new("WedgePart")
-	part.Name = name
-	part.Anchored = true
-	part.Size = size
-	part.CFrame = cframe
-	part.Color = color
-	part.Material = material
-	part.TopSurface = Enum.SurfaceType.Smooth
-	part.BottomSurface = Enum.SurfaceType.Smooth
-	part.Parent = parent
-	return part
-end
-
 -- === АКУЛЫ ===
 -- Акула плавает ПОД водой по своему кольцу вокруг пустого центра карты и
 -- периодически всплывает так, что над поверхностью видно ТОЛЬКО спинной плавник.
@@ -358,23 +344,23 @@ local function buildIslandBase(folder, position, sandColor)
 	return green, sandRadius
 end
 
--- Деревянный трап с воды на южный берег: выпал за остров — заплыл к трапу
--- и поднялся обратно (раньше с воды было не залезть).
-local function buildReturnRamp(folder, position)
-	local ramp = makeWedge(
-		folder,
-		"ReturnRamp",
-		Vector3.new(10, 22, 48),
-		-- lookAt от острова: локальный +Z (высокая грань клина) смотрит на остров.
-		CFrame.lookAt(position + Vector3.new(0, -1, 112), position + Vector3.new(0, -1, 200)),
-		Color3.fromRGB(128, 90, 50),
-		Enum.Material.WoodPlanks
-	)
-	ramp.CanCollide = true
+-- Деревянного трапа с воды БОЛЬШЕ НЕТ: остров опущен (Config.PLOT_POSITIONS,
+-- Y=12) так, что песчаная лего-лесенка каймы встречает воду — из океана на
+-- пляж теперь просто выходишь по ступеням в любом месте берега.
 
-	-- Пара свай у нижнего (водного) конца трапа
-	for _, x in ipairs({ -4, 4 }) do
-		makeCylinder(folder, "RampPost", 14, 1.4, position + Vector3.new(x, -17, 128), Color3.fromRGB(73, 52, 34), Enum.Material.Wood)
+-- Кнопки-«блины» (слоты, стенды ракет, ПВО) раньше ВИСЕЛИ над поверхностью:
+-- их Y считался от уровня газона, а песчаная кайма ниже, платформа ракет выше.
+-- Ставим блин на ФАКТИЧЕСКУЮ поверхность: луч вниз, низ блина на землю.
+function PlotManager.SnapPadToSurface(pad)
+	local params = RaycastParams.new()
+	params.FilterType = Enum.RaycastFilterType.Exclude
+	params.FilterDescendantsInstances = { pad }
+	params.IgnoreWater = true
+	local from = pad.Position + Vector3.new(0, 30, 0)
+	local hit = workspace:Raycast(from, Vector3.new(0, -90, 0), params)
+	if hit then
+		-- Блин — цилиндр, лежащий на боку: толщина = Size.X.
+		pad.Position = Vector3.new(pad.Position.X, hit.Position.Y + pad.Size.X / 2 + 0.05, pad.Position.Z)
 	end
 end
 
@@ -481,7 +467,6 @@ local function buildIslandModel(plotId, position)
 	-- Тёплый золотистый песок вместо белёсого.
 	buildIslandBase(folder, position, Color3.fromRGB(240, 202, 116))
 	buildIslandDecor(folder, position, plotId)
-	buildReturnRamp(folder, position)
 
 	-- Спавн НЕВИДИМ: раньше это был "второй квадрат песка", плававший над пляжем
 	-- рядом с ракетой. Точка респавна работает, но геометрии больше не видно.
@@ -501,18 +486,29 @@ local function buildIslandModel(plotId, position)
 	siloFolder.Name = "RocketSilo"
 	siloFolder.Parent = folder
 
-	-- Кнопки покупки зданий — плоские зелёные "блины" у кромки песка. Покупка/прокачка
-	-- срабатывает по НАСТУПАНИЮ (Touched). Над каждой висит ценник (BillboardGui).
+	-- Кнопки покупки зданий — плоские зелёные "блины". Слоты 3-5 — у кромки
+	-- песка (мост ведёт на под-остров), слоты 1-2 (пиццерия и кафе) — ПРЯМО НА
+	-- ГАЗОНЕ главного острова (Config.LAWN_SLOTS). Покупка/прокачка срабатывает
+	-- по НАСТУПАНИЮ (Touched). Над каждой висит ценник (BillboardGui).
 	local slotsData = {}
 	local edgeR = Config.PLOT_CENTER_SIZE * 0.64 - 8
 	for slotIdx, offset in ipairs(Config.SLOT_OFFSETS) do
-		local dir = offset.Unit
-		local edgePos = position + dir * edgeR
-		-- Сдвигаем кнопку ВБОК от радиальной линии (по ней идёт мост/тропа) и слегка
-		-- приподнимаем над песком: кнопка не пересекает мост, а её нижняя грань
-		-- не копланарна песку (нет z-fighting).
-		local side = dir:Cross(Vector3.new(0, 1, 0))
-		local padPos = edgePos + side * 9 + Vector3.new(0, SURFACE_OFFSET + 0.8, 0)
+		local lawn = Config.LAWN_SLOTS[slotIdx]
+		local slotCenter, edgePos, padPos
+		if lawn then
+			-- Пиццерия/кафе на газоне: кнопка стоит между зданием и спавном.
+			slotCenter = position + lawn.offset
+			edgePos = slotCenter
+			padPos = position + lawn.padOffset + Vector3.new(0, SURFACE_OFFSET + 0.6, 0)
+		else
+			local dir = offset.Unit
+			edgePos = position + dir * edgeR
+			slotCenter = position + offset
+			-- Сдвигаем кнопку ВБОК от радиальной линии (по ней идёт мост/тропа):
+			-- кнопка не пересекает мост.
+			local side = dir:Cross(Vector3.new(0, 1, 0))
+			padPos = edgePos + side * 9 + Vector3.new(0, SURFACE_OFFSET + 0.8, 0)
+		end
 
 		local buyPad = Instance.new("Part")
 		buyPad.Name = "BuyPad_" .. slotIdx
@@ -529,6 +525,8 @@ local function buildIslandModel(plotId, position)
 			buyPad.CanCollide = false
 		end
 		buyPad.Parent = folder
+		-- Кнопка прижимается к фактической поверхности (раньше висела над песком).
+		PlotManager.SnapPadToSurface(buyPad)
 
 		-- Ценник над кнопкой. Enabled = false: видимостью управляет клиент
 		-- (PriceTags) — ценники показываются ТОЛЬКО на своём острове и ТОЛЬКО
@@ -559,7 +557,7 @@ local function buildIslandModel(plotId, position)
 		priceLabel.Parent = billboard
 
 		slotsData[slotIdx] = {
-			center = position + offset,
+			center = slotCenter,
 			edgePos = edgePos,
 			buyPad = buyPad,
 			billboard = billboard,
@@ -586,6 +584,8 @@ local function buildIslandModel(plotId, position)
 		pad.Transparency = 1
 		pad.CanCollide = false
 		pad.Parent = folder
+		-- Круг ложится на фактическую поверхность (серая платформа поднята).
+		PlotManager.SnapPadToSurface(pad)
 
 		local billboard = Instance.new("BillboardGui")
 		billboard.Name = "PriceTag"
@@ -740,16 +740,28 @@ function PlotManager.CreateLauncher(player, launcherIndex, level)
 	local sandY = plot.center.Y + SURFACE_OFFSET
 	local basePos = Vector3.new(plot.center.X + offset.X, sandY, plot.center.Z + offset.Z)
 
-	-- Бетонная площадка лежит на лужайке; нижняя грань не копланарна поверхности.
-	local pad = makeCylinder(model, "Pad", 0.4, 13, basePos + Vector3.new(0, 0.45, 0), Color3.fromRGB(148, 150, 156), Enum.Material.Concrete)
-	local rim = makeCylinder(model, "ReadyRim", 0.5, 14.4, basePos + Vector3.new(0, 0.66, 0), teamColor, Enum.Material.Neon)
-	rim.CanCollide = false
-
 	-- Стенд: ЛЕГО-МЕШ ракеты (rocket_mkN из Blender, чем выше Mark — тем крупнее),
 	-- та же высота, что у процедурной, чтобы точка старта не поехала.
 	-- Фолбэк — общий конструктор RocketFactory (как у летящей ракеты).
-	local parts, window, height
 	local meshRocket = MeshLibrary.FindPart(Config.ROCKETS.FOLDER, { "Mk" .. mark, "rocket_mk" .. mark })
+
+	-- Roblox центрирует меш по bbox, а ось mk1/mk2 смещена от центра bbox
+	-- (несимметричные плавники): ракета стояла НЕ по центру круга. Двигаем
+	-- КРУГ (площадку и обод) под фактическую ось ракеты, сама ракета не едет.
+	local axisShift = Vector3.zero
+	if meshRocket then
+		local preScale = RocketFactory.GetHeight(mark, 1) / math.max(meshRocket.Size.Y, 0.001)
+		local off = Config.ROCKETS.AXIS_OFF[mark] or Vector3.zero
+		axisShift = Vector3.new(off.X, 0, off.Z) * preScale
+	end
+	local axisPos = basePos + axisShift
+
+	-- Бетонная площадка и обод — под осью ракеты; нижняя грань не копланарна поверхности.
+	local pad = makeCylinder(model, "Pad", 0.4, 13, axisPos + Vector3.new(0, 0.45, 0), Color3.fromRGB(148, 150, 156), Enum.Material.Concrete)
+	local rim = makeCylinder(model, "ReadyRim", 0.5, 14.4, axisPos + Vector3.new(0, 0.66, 0), teamColor, Enum.Material.Neon)
+	rim.CanCollide = false
+
+	local parts, window, height
 	if meshRocket then
 		height = RocketFactory.GetHeight(mark, 1)
 		local scale = height / math.max(meshRocket.Size.Y, 0.001)
@@ -762,15 +774,70 @@ function PlotManager.CreateLauncher(player, launcherIndex, level)
 		parts = { meshRocket }
 		window = nil
 	else
-		parts, window, height = RocketFactory.Build(model, CFrame.new(basePos + Vector3.new(0, 0.65, 0)), teamColor, mark, 1, true)
+		parts, window, height = RocketFactory.Build(model, CFrame.new(axisPos + Vector3.new(0, 0.65, 0)), teamColor, mark, 1, true)
 	end
-	local origin = Vector3.new(basePos.X, basePos.Y + 0.65 + height + 2, basePos.Z)
+	-- Точка старта — на фактической оси ракеты.
+	local origin = Vector3.new(axisPos.X, basePos.Y + 0.65 + height + 2, axisPos.Z)
+
+	-- Красный таймер перезарядки НА МЕСТЕ ракеты: виден ТОЛЬКО пока стенд в
+	-- кулдауне (ракета в это время невидима), см. PlotManager.ShowReloadTimer.
+	local reloadGui = Instance.new("BillboardGui")
+	reloadGui.Name = "ReloadTimer"
+	reloadGui.Size = UDim2.new(0, 96, 0, 42)
+	reloadGui.StudsOffset = Vector3.new(0, math.max(6, height * 0.55), 0)
+	reloadGui.AlwaysOnTop = true
+	reloadGui.MaxDistance = 260
+	reloadGui.Enabled = false
+	reloadGui.Parent = pad
+	local reloadLabel = Instance.new("TextLabel")
+	reloadLabel.Name = "ReloadLabel"
+	reloadLabel.Size = UDim2.new(1, 0, 1, 0)
+	reloadLabel.BackgroundTransparency = 1
+	reloadLabel.Font = Enum.Font.GothamBlack
+	reloadLabel.TextSize = 30
+	reloadLabel.TextColor3 = Color3.fromRGB(255, 64, 56)
+	reloadLabel.TextStrokeColor3 = Color3.fromRGB(35, 0, 0)
+	reloadLabel.TextStrokeTransparency = 0.3
+	reloadLabel.Text = ""
+	reloadLabel.Parent = reloadGui
 
 	-- Запуск идёт через прицел (клавиша E на стенде), см. HudManager.
 
 	model.PrimaryPart = pad
-	plot.launchers[launcherIndex] = { model = model, parts = parts, window = window, rim = rim, origin = origin, mark = mark }
+	plot.launchers[launcherIndex] = {
+		model = model,
+		parts = parts,
+		window = window,
+		rim = rim,
+		origin = origin,
+		mark = mark,
+		reloadGui = reloadGui,
+		reloadLabel = reloadLabel,
+		reloadToken = 0,
+	}
 	return plot.launchers[launcherIndex]
+end
+
+-- Красный отсчёт на месте ракеты, пока стенд перезаряжается (1 раз в 0.2с).
+-- token отменяет старый отсчёт, если стенд перестроили/перезапустили таймер.
+function PlotManager.ShowReloadTimer(player, launcherIndex, seconds)
+	local _, plot = PlotManager.GetPlotByPlayer(player)
+	local launcher = plot and plot.launchers[launcherIndex]
+	if not launcher or not launcher.reloadGui then return end
+	launcher.reloadToken = (launcher.reloadToken or 0) + 1
+	local token = launcher.reloadToken
+	local endsAt = os.clock() + seconds
+	launcher.reloadGui.Enabled = true
+	task.spawn(function()
+		while os.clock() < endsAt do
+			if launcher.reloadToken ~= token or not launcher.model.Parent then return end
+			launcher.reloadLabel.Text = tostring(math.max(1, math.ceil(endsAt - os.clock())))
+			task.wait(0.2)
+		end
+		if launcher.reloadToken == token and launcher.model.Parent then
+			launcher.reloadGui.Enabled = false
+		end
+	end)
 end
 
 -- Полная перестройка стенда (эволюция внешнего вида каждые 5 уровней).

@@ -86,13 +86,16 @@ local function buildFlyingRocket(originPos, mark, teamColor)
 	local meshRocket = MeshLibrary.FindPart(Config.ROCKETS.FOLDER, { "Mk" .. mark, "rocket_mk" .. mark })
 	if meshRocket then
 		-- Тот же меш, что на стенде, той же пропорции (в полёте — вдвое меньше).
+		local scale = height / math.max(meshRocket.Size.Y, 0.001)
 		meshRocket.Name = "RocketMesh"
-		meshRocket.Size = meshRocket.Size * (height / math.max(meshRocket.Size.Y, 0.001))
+		meshRocket.Size = meshRocket.Size * scale
 		meshRocket.Anchored = true
 		meshRocket.CanCollide = false
 		meshRocket.CanQuery = false
-		-- Нос меша (+Y на стенде) разворачиваем вперёд по полёту (-Z корня).
-		meshRocket.CFrame = root.CFrame * CFrame.Angles(math.rad(-90), 0, 0)
+		-- Нос меша (+Y на стенде) разворачиваем вперёд по полёту (-Z корня), а
+		-- смещение оси от центра bbox (mk1/mk2) компенсируем — ось строго на траектории.
+		local axisOff = (Config.ROCKETS.AXIS_OFF[mark] or Vector3.zero) * scale
+		meshRocket.CFrame = root.CFrame * CFrame.Angles(math.rad(-90), 0, 0) * CFrame.new(-axisOff.X, 0, -axisOff.Z)
 		meshRocket.Parent = model
 	else
 		-- Ось ракеты (+Y конструктора) разворачиваем в -Z корня (нос вперёд),
@@ -296,6 +299,10 @@ local function onPadStep(player, index)
 			local now = workspace:GetServerTimeNow()
 			local readyAt = launcherReady[player] and launcherReady[player][index] or 0
 			PlotManager.SetLauncherReady(player, index, readyAt <= now)
+			if readyAt > now then
+				-- Стенд перестроен посреди перезарядки: перевешиваем таймер на новый.
+				PlotManager.ShowReloadTimer(player, index, readyAt - now)
+			end
 			notify(player, string.format("Ракета %d эволюционировала — Mk %d!", index, newMark), "success")
 		else
 			notify(player, string.format("Ракета %d прокачана до ур.%d", index, result), "success")
@@ -328,10 +335,15 @@ local function tryTakeLauncher(player, index)
 	local now = workspace:GetServerTimeNow()
 	launcherReady[player] = launcherReady[player] or {}
 	if (launcherReady[player][index] or 0) <= now then
-		launcherReady[player][index] = now + Config.ROCKET_RELOAD
+		-- Кулдаун растёт с уровнем стенда (немного, +0.5с за уровень) — плата
+		-- за растущий радиус поражения (см. Config.RocketReloadForLevel).
+		local reload = Config.RocketReloadForLevel(DataManager.GetLauncherLevel(player, index))
+		launcherReady[player][index] = now + reload
 		PlotManager.SetLauncherReady(player, index, false)
+		-- Красный отсчёт на месте ракеты, пока она перезаряжается.
+		PlotManager.ShowReloadTimer(player, index, reload)
 		sendRocketState(player)
-		task.delay(Config.ROCKET_RELOAD, function()
+		task.delay(reload, function()
 			if player.Parent and launcherReady[player] and launcherReady[player][index] then
 				launcherReady[player][index] = 0
 				PlotManager.SetLauncherReady(player, index, true)
@@ -443,9 +455,11 @@ function RocketManager.Init()
 		local originPos = PlotManager.GetLauncherOrigin(player, launcherIndex)
 		if not originPos then return end
 
-		-- Урон и внешний вид летящей ракеты зависят от уровня выбранного стенда.
+		-- Урон, РАДИУС ПОРАЖЕНИЯ и внешний вид летящей ракеты зависят от уровня
+		-- выбранного стенда (радиус — главный бонус прокачки).
 		local level = DataManager.GetLauncherLevel(player, launcherIndex)
 		local damage = Config.RocketDamageForLevel(level)
+		local impactRadius = Config.RocketImpactRadiusForLevel(level)
 		local mark = Config.RocketMark(level)
 		local _, myPlot = PlotManager.GetPlotByPlayer(player)
 		local teamColor = myPlot and myPlot.themeColor or Color3.fromRGB(220, 70, 60)
@@ -465,7 +479,7 @@ function RocketManager.Init()
 
 		flyRocket(player, originPos, impactPos, targetPlotId, mark, teamColor, function()
 			-- Авторитетный прилёт: урон/оглушение зданий считает сервер.
-			local destroyed = FarmManager.ApplyRocketImpact(targetPlotId, impactPos, damage)
+			local destroyed = FarmManager.ApplyRocketImpact(targetPlotId, impactPos, damage, impactRadius)
 			Remotes.Get("RocketImpact"):FireAllClients({
 				pos = impactPos,
 				destroyed = destroyed,

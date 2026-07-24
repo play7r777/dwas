@@ -232,12 +232,29 @@ end
 -- === Маркер точки удара (только визуальный, локальный клиенту) ===
 -- Красный НЕЗАКРАШЕННЫЙ круг с косым крестом внутри (как на референсе):
 -- кольцо из неоновых сегментов + две перекладины, плоско над землёй.
--- Жёлтого залитого диска и вертикальной красной полосы больше нет.
+-- РАЗМЕР КРУГА = ФАКТИЧЕСКИЙ РАДИУС ПОРАЖЕНИЯ выбранной ракеты
+-- (Config.RocketImpactRadiusForLevel): выше уровень стенда — шире воронка и
+-- шире круг. При смене радиуса маркер пересобирается.
 local MARKER_COLOR = Color3.fromRGB(230, 40, 34)
-local MARKER_RADIUS = 8
+local markerRadius = 0 -- радиус, с которым построен закэшированный маркер
 
-local function ensureMarker()
-	if aimMarker then return aimMarker end
+-- Радиус поражения ракеты, выбранной для этого прицеливания (стенд E / меню).
+local function currentImpactRadius()
+	local level = 1
+	if pendingLauncherIndex and rocketLevels[pendingLauncherIndex] then
+		level = rocketLevels[pendingLauncherIndex]
+	end
+	return Config.RocketImpactRadiusForLevel(level)
+end
+
+local function ensureMarker(radius)
+	if aimMarker and markerRadius == radius then return aimMarker end
+	if aimMarker then
+		aimMarker:Destroy()
+		aimMarker = nil
+	end
+	markerRadius = radius
+
 	local m = Instance.new("Model")
 	m.Name = "RocketAimMarker"
 
@@ -260,29 +277,32 @@ local function ensureMarker()
 	core.Transparency = 1
 	m.PrimaryPart = core
 
-	-- Кольцо: сегменты по окружности, внутри пусто.
-	local segments = 28
+	-- Кольцо: число и длина сегментов подстраиваются под радиус.
+	local segments = math.clamp(math.floor(radius * 3.5 + 0.5), 24, 64)
+	local segLen = (2 * math.pi * radius / segments) * 1.18
+	local barWidth = math.clamp(radius * 0.11, 0.9, 1.8)
 	for i = 1, segments do
 		local a = (i / segments) * math.pi * 2
 		markerPart(
 			"Ring_" .. i,
-			Vector3.new(2.1, 0.35, 0.9),
-			CFrame.new(math.cos(a) * MARKER_RADIUS, 0, math.sin(a) * MARKER_RADIUS)
+			Vector3.new(segLen, 0.35, barWidth),
+			CFrame.new(math.cos(a) * radius, 0, math.sin(a) * radius)
 				* CFrame.Angles(0, -a - math.rad(90), 0)
 		)
 	end
 
 	-- Косой крест внутри кольца.
-	local armLen = MARKER_RADIUS * 1.35
-	markerPart("Cross_1", Vector3.new(armLen, 0.35, 1.4), CFrame.Angles(0, math.rad(45), 0))
-	markerPart("Cross_2", Vector3.new(armLen, 0.35, 1.4), CFrame.Angles(0, math.rad(-45), 0))
+	local armLen = radius * 1.35
+	local crossW = math.clamp(radius * 0.17, 1.4, 2.6)
+	markerPart("Cross_1", Vector3.new(armLen, 0.35, crossW), CFrame.Angles(0, math.rad(45), 0))
+	markerPart("Cross_2", Vector3.new(armLen, 0.35, crossW), CFrame.Angles(0, math.rad(-45), 0))
 
 	aimMarker = m
 	return m
 end
 
 local function showMarker(pos)
-	local m = ensureMarker()
+	local m = ensureMarker(currentImpactRadius())
 	m.Parent = workspace
 	m:PivotTo(CFrame.new(pos + Vector3.new(0, 0.6, 0)))
 end
