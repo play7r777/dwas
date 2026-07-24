@@ -42,7 +42,7 @@ local flashToken = 0
 -- Настройки (шестерёнка) и Attack-меню
 local gearBtn, settingsPanel, animToggleBtn
 local settingsOpen = false
-local attackBtn, attackPanel
+local attackBtn, attackPanel, attackPanelScale
 local attackOpen = false
 local rowButtons = {}
 
@@ -111,6 +111,42 @@ local function fadePanel(panel, open)
 			if panel.GroupTransparency >= 0.99 then panel.Visible = false end
 		end)
 		t:Play()
+	end
+end
+
+-- Плавное появление панели «РАКЕТНЫЙ УДАР»: панель выезжает от кнопки Attack с
+-- лёгкой «пружинкой» (Back) и проявляется, строки ракет догоняют каскадом.
+-- Закрытие — быстрый мягкий фейд обратно к кнопке.
+local ATTACK_PANEL_POS = UDim2.new(0, 104, 0.5, 0)
+
+local function openAttackPanel(open)
+	if not attackPanel then return end
+	if open then
+		attackPanel.Visible = true
+		attackPanel.GroupTransparency = 1
+		attackPanel.Position = ATTACK_PANEL_POS - UDim2.fromOffset(18, 0)
+		if attackPanelScale then attackPanelScale.Scale = 0.92 end
+		TweenService:Create(attackPanel, TweenInfo.new(0.22, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { GroupTransparency = 0 }):Play()
+		TweenService:Create(attackPanel, TweenInfo.new(0.34, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Position = ATTACK_PANEL_POS }):Play()
+		if attackPanelScale then
+			TweenService:Create(attackPanelScale, TweenInfo.new(0.34, Enum.EasingStyle.Back, Enum.EasingDirection.Out), { Scale = 1 }):Play()
+		end
+		-- Каскад строк: каждая следующая проявляется чуть позже предыдущей.
+		local i = 0
+		for _, child in ipairs(attackPanel:GetChildren()) do
+			if child.Name == "RocketRow" and child:IsA("CanvasGroup") then
+				i += 1
+				child.GroupTransparency = 1
+				TweenService:Create(child, TweenInfo.new(0.26, Enum.EasingStyle.Quad, Enum.EasingDirection.Out, 0, false, 0.05 + i * 0.045), { GroupTransparency = 0 }):Play()
+			end
+		end
+	else
+		local t = TweenService:Create(attackPanel, TweenInfo.new(0.16, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { GroupTransparency = 1 })
+		t.Completed:Once(function()
+			if attackPanel.GroupTransparency >= 0.99 then attackPanel.Visible = false end
+		end)
+		t:Play()
+		TweenService:Create(attackPanel, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.In), { Position = ATTACK_PANEL_POS - UDim2.fromOffset(12, 0) }):Play()
 	end
 end
 
@@ -194,34 +230,52 @@ local function findClickedPlot(part)
 end
 
 -- === Маркер точки удара (только визуальный, локальный клиенту) ===
+-- Красный НЕЗАКРАШЕННЫЙ круг с косым крестом внутри (как на референсе):
+-- кольцо из неоновых сегментов + две перекладины, плоско над землёй.
+-- Жёлтого залитого диска и вертикальной красной полосы больше нет.
+local MARKER_COLOR = Color3.fromRGB(230, 40, 34)
+local MARKER_RADIUS = 8
+
 local function ensureMarker()
-	if aimMarker and aimMarker.Parent then return aimMarker end
+	if aimMarker then return aimMarker end
 	local m = Instance.new("Model")
 	m.Name = "RocketAimMarker"
 
-	local beam = Instance.new("Part")
-	beam.Name = "Beam"
-	beam.Shape = Enum.PartType.Cylinder
-	beam.Anchored = true
-	beam.CanCollide = false
-	beam.CanQuery = false
-	beam.Material = Enum.Material.Neon
-	beam.Color = Color3.fromRGB(255, 70, 55)
-	beam.Transparency = 0.25
-	beam.Size = Vector3.new(60, 2, 2)
-	beam.Parent = m
+	local function markerPart(name, size, cf)
+		local p = Instance.new("Part")
+		p.Name = name
+		p.Anchored = true
+		p.CanCollide = false
+		p.CanQuery = false
+		p.Material = Enum.Material.Neon
+		p.Color = MARKER_COLOR
+		p.Size = size
+		p.CFrame = cf
+		p.Parent = m
+		return p
+	end
 
-	local ring = Instance.new("Part")
-	ring.Name = "Ring"
-	ring.Shape = Enum.PartType.Cylinder
-	ring.Anchored = true
-	ring.CanCollide = false
-	ring.CanQuery = false
-	ring.Material = Enum.Material.Neon
-	ring.Color = Color3.fromRGB(255, 120, 60)
-	ring.Transparency = 0.15
-	ring.Size = Vector3.new(1, 16, 16)
-	ring.Parent = m
+	-- Невидимый центр-пивот: PivotTo ставит весь маркер в точку удара.
+	local core = markerPart("Core", Vector3.new(0.2, 0.2, 0.2), CFrame.new())
+	core.Transparency = 1
+	m.PrimaryPart = core
+
+	-- Кольцо: сегменты по окружности, внутри пусто.
+	local segments = 28
+	for i = 1, segments do
+		local a = (i / segments) * math.pi * 2
+		markerPart(
+			"Ring_" .. i,
+			Vector3.new(2.1, 0.35, 0.9),
+			CFrame.new(math.cos(a) * MARKER_RADIUS, 0, math.sin(a) * MARKER_RADIUS)
+				* CFrame.Angles(0, -a - math.rad(90), 0)
+		)
+	end
+
+	-- Косой крест внутри кольца.
+	local armLen = MARKER_RADIUS * 1.35
+	markerPart("Cross_1", Vector3.new(armLen, 0.35, 1.4), CFrame.Angles(0, math.rad(45), 0))
+	markerPart("Cross_2", Vector3.new(armLen, 0.35, 1.4), CFrame.Angles(0, math.rad(-45), 0))
 
 	aimMarker = m
 	return m
@@ -229,10 +283,8 @@ end
 
 local function showMarker(pos)
 	local m = ensureMarker()
-	-- Цилиндры лежат вдоль локального X; поворот на 90° по Z ставит их вертикально.
-	m.Beam.CFrame = CFrame.new(pos + Vector3.new(0, 30, 0)) * CFrame.Angles(0, 0, math.rad(90))
-	m.Ring.CFrame = CFrame.new(pos + Vector3.new(0, 0.6, 0)) * CFrame.Angles(0, 0, math.rad(90))
 	m.Parent = workspace
+	m:PivotTo(CFrame.new(pos + Vector3.new(0, 0.6, 0)))
 end
 
 local function clearMarker()
@@ -385,11 +437,31 @@ function HudManager.OpenTargeting(launcherIndex)
 	setLaunchEnabled(false)
 	if attackOpen then
 		attackOpen = false
-		fadePanel(attackPanel, false)
+		openAttackPanel(false)
 	end
-	if topBar then topBar.Visible = true end
-	if hintLabel then hintLabel.Visible = true end
-	if launchButton then launchButton.Visible = true end
+	-- Плавный вход прицела: плашка целей съезжает сверху, подсказка и кнопка
+	-- запуска мягко проявляются следом.
+	if topBar then
+		topBar.Visible = true
+		topBar.Position = UDim2.new(0.5, -230, 0, -76)
+		TweenService:Create(topBar, TweenInfo.new(0.32, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), { Position = UDim2.new(0.5, -230, 0, 14) }):Play()
+	end
+	if hintLabel then
+		hintLabel.Visible = true
+		hintLabel.TextTransparency = 1
+		TweenService:Create(hintLabel, TweenInfo.new(0.35, Enum.EasingStyle.Quad, Enum.EasingDirection.Out, 0, false, 0.12), { TextTransparency = 0 }):Play()
+	end
+	if launchButton then
+		launchButton.Visible = true
+		launchButton.Position = UDim2.new(0.5, -130, 1, -128)
+		launchButton.BackgroundTransparency = 1
+		launchButton.TextTransparency = 1
+		TweenService:Create(launchButton, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out, 0, false, 0.06), {
+			Position = UDim2.new(0.5, -130, 1, -148),
+			BackgroundTransparency = 0,
+			TextTransparency = 0,
+		}):Play()
+	end
 	selectTarget(1)
 end
 
@@ -507,7 +579,8 @@ local function rebuildAttackRows()
 	end
 	rowButtons = {}
 	for i = 1, launcherCount do
-		local row = Instance.new("Frame")
+		-- CanvasGroup: строка умеет плавно проявляться целиком (каскад открытия).
+		local row = Instance.new("CanvasGroup")
 		row.Name = "RocketRow"
 		row.BackgroundColor3 = Color3.fromRGB(26, 33, 42)
 		row.BackgroundTransparency = 0.15
@@ -592,8 +665,10 @@ function HudManager.Init(initAnimEnabled)
 	attackText.TextXAlignment = Enum.TextXAlignment.Center
 
 	-- Панель Attack: «Ракета N — ОТПРАВИТЬ», стрелять можно без подхода к стендам.
-	attackPanel = makeCanvasPanel(screenGui, UDim2.new(0, 252, 0, 150), UDim2.new(0, 104, 0.5, 0), "AttackPanel")
+	attackPanel = makeCanvasPanel(screenGui, UDim2.new(0, 252, 0, 150), ATTACK_PANEL_POS, "AttackPanel")
 	attackPanel.AnchorPoint = Vector2.new(0, 0.5)
+	attackPanelScale = Instance.new("UIScale")
+	attackPanelScale.Parent = attackPanel
 	local attackTitle = makeLabel(attackPanel, "РАКЕТНЫЙ УДАР", UDim2.new(1, -20, 0, 26), UDim2.new(0, 12, 0, 6), Color3.fromRGB(236, 108, 91), 14, Enum.Font.GothamBold)
 	attackTitle.TextXAlignment = Enum.TextXAlignment.Left
 
@@ -603,7 +678,7 @@ function HudManager.Init(initAnimEnabled)
 		if attackOpen then
 			rebuildAttackRows()
 		end
-		fadePanel(attackPanel, attackOpen)
+		openAttackPanel(attackOpen)
 	end)
 
 	-- === Шестерёнка настроек (правый нижний угол) ===
@@ -650,12 +725,11 @@ function HudManager.Init(initAnimEnabled)
 	islandLabel = makeLabel(topBar, "", UDim2.new(1, -140, 0, 20), UDim2.new(0, 70, 0, 40), Color3.fromRGB(160, 175, 182), 13)
 	islandLabel.TextXAlignment = Enum.TextXAlignment.Center
 
-	-- ✕ прижата к правому верхнему углу плашки (снаружи)
-	local closeBtn = makeButton(topBar, "✕", UDim2.new(0, 34, 0, 34), UDim2.new(1, 10, 0, 0), Color3.fromRGB(73, 82, 86))
+	-- Крестика закрытия справа от плашки БОЛЬШЕ НЕТ: прицел закрывается
+	-- ТОЛЬКО клавишей Q (см. InputBegan ниже и подсказку под плашкой).
 
 	prevBtn.MouseButton1Click:Connect(function() selectTarget(targetIndex - 1) end)
 	nextBtn.MouseButton1Click:Connect(function() selectTarget(targetIndex + 1) end)
-	closeBtn.MouseButton1Click:Connect(function() HudManager.CloseTargeting() end)
 
 	-- Подсказка под плашкой
 	hintLabel = makeLabel(screenGui, "", UDim2.new(0, 680, 0, 22), UDim2.new(0.5, -340, 0, 88), Color3.fromRGB(255, 214, 90), 14)
@@ -683,7 +757,8 @@ function HudManager.Init(initAnimEnabled)
 			selectTarget(targetIndex - 1)
 		elseif input.KeyCode == Enum.KeyCode.D or input.KeyCode == Enum.KeyCode.Right then
 			selectTarget(targetIndex + 1)
-		elseif input.KeyCode == Enum.KeyCode.Q or input.KeyCode == Enum.KeyCode.Escape then
+		elseif input.KeyCode == Enum.KeyCode.Q then
+			-- Выход из прицела — ТОЛЬКО Q (крестик и Escape убраны).
 			HudManager.CloseTargeting()
 		end
 	end)

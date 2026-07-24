@@ -562,6 +562,24 @@ function FarmManager.BuySlot(player, slotIndex)
 	FarmManager.BuyOrUpgrade(player, slotIndex)
 end
 
+-- === Экономическая защита от «мёртвого тупика» ===
+-- Пока на острове игрока нет НИ ОДНОГО доходного здания, нельзя потратить
+-- деньги на ракеты/ПВО так, чтобы не осталось на Пиццерию (первую фармилку) —
+-- иначе доход не появился бы уже никогда (наступил на прокачку ракеты вместо
+-- покупки фармилки → $0 навсегда). Возвращает true либо (false, причина).
+function FarmManager.CanSpendKeepingReserve(player, cost)
+	local plotId = select(1, PlotManager.GetPlotByPlayer(player))
+	local farms = plotId and plotFarms[plotId]
+	if farms and next(farms) ~= nil then
+		return true -- доход уже есть: тратить можно всё
+	end
+	local firstFarm = Config.FARM_TYPES[1]
+	if DataManager.GetMoney(player) - cost >= firstFarm.cost then
+		return true
+	end
+	return false, string.format("Сначала постройте «%s» ($%d) — иначе останетесь без дохода", firstFarm.name, firstFarm.cost)
+end
+
 local function destroyBuilding(plotId, slotIndex)
 	local slotData = plotFarms[plotId] and plotFarms[plotId][slotIndex]
 	if not slotData or not slotData.alive then return end
@@ -686,19 +704,39 @@ function FarmManager.Init()
 			task.wait(Config.FARM_INTERVAL)
 			for _, player in ipairs(Players:GetPlayers()) do
 				local plotId = select(1, PlotManager.GetPlotByPlayer(player))
-				if plotId and plotFarms[plotId] then
-					for slotIdx, slotData in pairs(plotFarms[plotId]) do
-						local disabled = slotData and slotData.disabledUntil and workspace:GetServerTimeNow() < slotData.disabledUntil
-						if slotData and slotData.alive and not disabled then
-							local farmConfig = Config.FARM_TYPES[slotData.tier]
-							if farmConfig then
-								-- Доход растёт с уровнем здания.
-								local income = Config.IncomeForLevel(slotData.tier, slotData.level or 1)
-								DataManager.AddMoney(player, income)
-								local plot = PlotManager.GetPlot(plotId)
-								if plot and plot.slots[slotIdx] then
-									Remotes.Get("SpawnIncomeFX"):FireClient(player, plot.slots[slotIdx].center + Vector3.new(0, 10, 0), income)
+				if plotId then
+					local farms = plotFarms[plotId]
+					if farms then
+						for slotIdx, slotData in pairs(farms) do
+							local disabled = slotData and slotData.disabledUntil and workspace:GetServerTimeNow() < slotData.disabledUntil
+							if slotData and slotData.alive and not disabled then
+								local farmConfig = Config.FARM_TYPES[slotData.tier]
+								if farmConfig then
+									-- Доход растёт с уровнем здания.
+									local income = Config.IncomeForLevel(slotData.tier, slotData.level or 1)
+									DataManager.AddMoney(player, income)
+									local plot = PlotManager.GetPlot(plotId)
+									if plot and plot.slots[slotIdx] then
+										Remotes.Get("SpawnIncomeFX"):FireClient(player, plot.slots[slotIdx].center + Vector3.new(0, 10, 0), income)
+									end
 								end
+							end
+						end
+					end
+
+					-- СТРАХОВКА ОТ ТУПИКА: зданий нет и денег меньше цены Пиццерии
+					-- (в т.ч. старые сейвы с $0) → капает пособие, пока не наберётся
+					-- ровно на первую фармилку. Игра не может встать намертво.
+					if not (farms and next(farms) ~= nil) then
+						local goal = Config.FARM_TYPES[1].cost
+						local money = DataManager.GetMoney(player)
+						if money < goal then
+							local grant = math.min(Config.ECONOMY_SAFETY.RESCUE_INCOME, goal - money)
+							DataManager.AddMoney(player, grant)
+							local char = player.Character
+							local hrp = char and char:FindFirstChild("HumanoidRootPart")
+							if hrp then
+								Remotes.Get("SpawnIncomeFX"):FireClient(player, hrp.Position + Vector3.new(0, 4, 0), grant)
 							end
 						end
 					end

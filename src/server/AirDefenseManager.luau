@@ -23,6 +23,7 @@ local Remotes       = require(sharedFolder:WaitForChild("Remotes"))
 local DataManager   = require(script.Parent:WaitForChild("DataManager"))
 local PlotManager   = require(script.Parent:WaitForChild("PlotManager"))
 local RocketManager = require(script.Parent:WaitForChild("RocketManager"))
+local FarmManager   = require(script.Parent:WaitForChild("FarmManager"))
 local MeshLibrary   = require(script.Parent:WaitForChild("MeshLibrary"))
 
 local AirDefenseManager = {}
@@ -292,6 +293,18 @@ end
 
 local function onPadStep(player, plotId)
 	local level = DataManager.GetAirDefenseLevel(player)
+	if level >= AD.MAX_LEVEL then
+		refreshPad(plotId)
+		return
+	end
+	-- Защита от тупика: пока нет ни одной фармилки, нельзя спустить на ПВО
+	-- деньги, отложенные на Пиццерию (см. FarmManager.CanSpendKeepingReserve).
+	local stepCost = level == 0 and AD.COST or Config.AirDefenseUpgradeCost(level + 1)
+	local canSpend, reason = FarmManager.CanSpendKeepingReserve(player, stepCost)
+	if not canSpend then
+		notify(player, reason, "error")
+		return
+	end
 	if level == 0 then
 		local ok, result = DataManager.BuyAirDefense(player)
 		if not ok then

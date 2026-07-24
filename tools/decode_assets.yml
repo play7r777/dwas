@@ -1,10 +1,10 @@
 # Раскодирует текстуры/превью, загруженные как *.png.b64 (base64), обратно в
 # настоящие PNG и коммитит их. Нужен потому, что API-пуш умеет только текст.
-# Запускается сам при пуше в v3.3.0 или вручную (Run workflow).
+# Запускается сам при пуше в v3.3.0/v3.4.0 или вручную (Run workflow).
 name: Decode base64 assets
 on:
   push:
-    branches: [ "v3.3.0" ]
+    branches: [ "v3.3.0", "v3.4.0" ]
   workflow_dispatch:
 permissions:
   contents: write

@@ -14,6 +14,7 @@ local DataManager       = require(script.Parent:WaitForChild("DataManager"))
 local PlotManager       = require(script.Parent:WaitForChild("PlotManager"))
 local FarmManager       = require(script.Parent:WaitForChild("FarmManager"))
 local RocketFactory     = require(script.Parent:WaitForChild("RocketFactory"))
+local MeshLibrary       = require(script.Parent:WaitForChild("MeshLibrary"))
 
 local RocketManager = {}
 
@@ -60,9 +61,11 @@ end
 -- Attack (удалённо). Если клиент передал номер стенда (стоял у него по E или
 -- выбрал в меню) — летит ИМЕННО этот стенд, а не первый готовый.
 
--- Летящая ракета строится СЕРВЕРОМ (реплицируется всем) из ТОГО ЖЕ конструктора,
--- что и стенд на базе (RocketFactory): то же поколение Mark, тот же цвет команды,
--- те же детали — в полёте ракета выглядит точно как на базе (масштаб 0.5, нос по -Z).
+-- Летящая ракета строится СЕРВЕРОМ (реплицируется всем) и выглядит ТОЧНО как
+-- ракета на стенде: если для этого Mark импортирован Blender-меш (rocket_mkN) —
+-- летит именно он (уменьшенный, масштаб 0.5, нос по -Z). Раньше со стендов-мешей
+-- взлетала «чужая» процедурная ракета. Фолбэк — общий конструктор RocketFactory
+-- (без мешей стенд и полёт и так собираются одним конструктором).
 local FLY_SCALE = 0.5
 
 local function buildFlyingRocket(originPos, mark, teamColor)
@@ -79,11 +82,24 @@ local function buildFlyingRocket(originPos, mark, teamColor)
 	root.Parent = model
 	model.PrimaryPart = root
 
-	-- Ось ракеты (+Y конструктора) разворачиваем в -Z корня (нос вперёд),
-	-- центр корпуса совмещаем с корнем.
 	local height = RocketFactory.GetHeight(mark, FLY_SCALE)
-	local baseCF = root.CFrame * CFrame.Angles(math.rad(-90), 0, 0) * CFrame.new(0, -height / 2, 0)
-	RocketFactory.Build(model, baseCF, teamColor, mark, FLY_SCALE, false)
+	local meshRocket = MeshLibrary.FindPart(Config.ROCKETS.FOLDER, { "Mk" .. mark, "rocket_mk" .. mark })
+	if meshRocket then
+		-- Тот же меш, что на стенде, той же пропорции (в полёте — вдвое меньше).
+		meshRocket.Name = "RocketMesh"
+		meshRocket.Size = meshRocket.Size * (height / math.max(meshRocket.Size.Y, 0.001))
+		meshRocket.Anchored = true
+		meshRocket.CanCollide = false
+		meshRocket.CanQuery = false
+		-- Нос меша (+Y на стенде) разворачиваем вперёд по полёту (-Z корня).
+		meshRocket.CFrame = root.CFrame * CFrame.Angles(math.rad(-90), 0, 0)
+		meshRocket.Parent = model
+	else
+		-- Ось ракеты (+Y конструктора) разворачиваем в -Z корня (нос вперёд),
+		-- центр корпуса совмещаем с корнем.
+		local baseCF = root.CFrame * CFrame.Angles(math.rad(-90), 0, 0) * CFrame.new(0, -height / 2, 0)
+		RocketFactory.Build(model, baseCF, teamColor, mark, FLY_SCALE, false)
+	end
 
 	local front = Instance.new("Attachment")
 	front.Position = Vector3.new(0, 0, -height * 0.55)
@@ -260,6 +276,13 @@ local function onPadStep(player, index)
 		-- ПРОКАЧКА
 		local level = DataManager.GetLauncherLevel(player, index)
 		if level >= Config.MAX_ROCKET_LEVEL then return end
+		-- Защита от тупика: пока нет ни одной фармилки, нельзя спустить на
+		-- прокачку деньги, отложенные на Пиццерию (иначе доход не появится никогда).
+		local canSpend, reason = FarmManager.CanSpendKeepingReserve(player, Config.RocketUpgradeCost(level + 1))
+		if not canSpend then
+			notify(player, reason, "error")
+			return
+		end
 		local oldMark = Config.RocketMark(level)
 		local ok, result = DataManager.UpgradeLauncher(player, index)
 		if not ok then
@@ -280,6 +303,12 @@ local function onPadStep(player, index)
 		refreshPads(player)
 	elseif index == count + 1 then
 		-- ПОКУПКА следующего стенда
+		-- Та же защита от тупика, что и у прокачки: сначала первая фармилка.
+		local canSpend, reason = FarmManager.CanSpendKeepingReserve(player, Config.LAUNCHER_COSTS[index] or 0)
+		if not canSpend then
+			notify(player, reason, "error")
+			return
+		end
 		local ok, result = DataManager.BuyNextLauncher(player)
 		if not ok then
 			notify(player, result, "error")
@@ -372,6 +401,9 @@ function RocketManager.Init()
 
 	-- Совместимость: старый ремоут покупки установки (основной путь — зелёные круги).
 	Remotes.Get("BuyLauncher").OnServerEvent:Connect(function(player)
+		local nextCost = Config.LAUNCHER_COSTS[DataManager.GetLauncherCount(player) + 1] or 0
+		local canSpend, reason = FarmManager.CanSpendKeepingReserve(player, nextCost)
+		if not canSpend then notify(player, reason, "error") return end
 		local success, result = DataManager.BuyNextLauncher(player)
 		if not success then notify(player, result, "error") return end
 		launcherReady[player] = launcherReady[player] or {}

@@ -68,42 +68,144 @@ local function makeWedge(parent, name, size, cframe, color, material)
 	return part
 end
 
--- Акула плавает ПОД водой и периодически всплывает так, что над поверхностью
--- видно ТОЛЬКО спинной плавник (как в кино) — тело никогда не выходит из воды.
+-- === АКУЛЫ ===
+-- Акула плавает ПОД водой по своему кольцу вокруг пустого центра карты и
+-- периодически всплывает так, что над поверхностью видно ТОЛЬКО спинной плавник.
+-- Если рядом ПЛЫВЁТ игрок — акула сворачивает с кольца, догоняет и ГРЫЗЁТ:
+-- Config.SHARKS.DPS урона в секунду (одна акула съедает игрока за 20 секунд —
+-- скорее декорация с зубами, чем настоящий хищник; вышел из воды — отстала).
+-- Внешний вид: меш assets/shark (ReplicatedStorage/SharkMeshes/shark или общая
+-- папка Meshes). Пока меша нет — процедурная акула из партов (крупнее прежней).
+
+-- Ближайший игрок В ВОДЕ (голова ниже уровня воды + запас) в радиусе агро.
+local function findPrey(pos)
+	local best, bestDist
+	for _, player in ipairs(Players:GetPlayers()) do
+		local char = player.Character
+		local hrp = char and char:FindFirstChild("HumanoidRootPart")
+		local hum = char and char:FindFirstChildOfClass("Humanoid")
+		if hrp and hum and hum.Health > 0 and hrp.Position.Y < Config.WATER_LEVEL + 1 then
+			local d = (hrp.Position - pos).Magnitude
+			if d <= Config.SHARKS.AGGRO_RADIUS and (not bestDist or d < bestDist) then
+				best, bestDist = hrp, d
+			end
+		end
+	end
+	return best
+end
+
 local function buildShark(parent, index)
+	local cfg = Config.SHARKS
 	local model = Instance.new("Model")
 	model.Name = "Shark_" .. index
 	model.Parent = parent
 
-	-- Центр карты — пустая вода: акулы кружат именно там.
-	local radius = 130 + (index % 4) * 70
-	local angle = index / 16 * math.pi * 2
-	local body = makePart(model, "Body", Vector3.new(4, 4, 13), CFrame.new(), Color3.fromRGB(67, 88, 101), Enum.Material.SmoothPlastic)
-	body.Shape = Enum.PartType.Ball
-	body.CanCollide = false
-	local fin = makePart(model, "Fin", Vector3.new(0.7, 5, 5), CFrame.new(), body.Color, Enum.Material.SmoothPlastic)
-	fin.CanCollide = false
-	local tail = makePart(model, "Tail", Vector3.new(0.8, 7, 5), CFrame.new(), body.Color, Enum.Material.SmoothPlastic)
-	tail.CanCollide = false
-	model.PrimaryPart = body
+	-- Невидимый корень: PivotTo двигает всю модель, нос смотрит по -Z корня.
+	local root = Instance.new("Part")
+	root.Name = "Root"
+	root.Size = Vector3.new(0.5, 0.5, 0.5)
+	root.Transparency = 1
+	root.Anchored = true
+	root.CanCollide = false
+	root.CanQuery = false
+	root.Parent = model
+	model.PrimaryPart = root
+
+	local tail -- только у процедурного фолбэка (виляет отдельно)
+	local meshPart = MeshLibrary.FindPart(cfg.FOLDER, cfg.FILES)
+	if meshPart then
+		-- Меш из assets/shark: длина зашита вдоль X, масштабируем по длинной оси.
+		local long = math.max(meshPart.Size.X, meshPart.Size.Z, 0.001)
+		meshPart.Name = "Body"
+		meshPart.Size = meshPart.Size * (cfg.LENGTH / long)
+		meshPart.Anchored = true
+		meshPart.CanCollide = false
+		meshPart.CanQuery = false
+		-- Нос меша (-X) доворачиваем вперёд по движению (-Z корня).
+		meshPart.CFrame = root.CFrame * CFrame.Angles(0, math.rad(cfg.MESH_YAW), 0)
+		meshPart.Parent = model
+	else
+		-- Фолбэк: акула из партов, в ~1.25 раза крупнее прежней.
+		local body = makePart(model, "Body", Vector3.new(5, 5, 16), root.CFrame, Color3.fromRGB(67, 88, 101), Enum.Material.SmoothPlastic)
+		body.Shape = Enum.PartType.Ball
+		body.CanCollide = false
+		body.CanQuery = false
+		local fin = makePart(model, "Fin", Vector3.new(0.8, 6, 6), root.CFrame * CFrame.new(0, 3.7, 1.2) * CFrame.Angles(0, 0, math.rad(45)), body.Color, Enum.Material.SmoothPlastic)
+		fin.CanCollide = false
+		fin.CanQuery = false
+		tail = makePart(model, "Tail", Vector3.new(1, 8.5, 6), root.CFrame * CFrame.new(0, 0, 8.6), body.Color, Enum.Material.SmoothPlastic)
+		tail.CanCollide = false
+		tail.CanQuery = false
+	end
 
 	task.spawn(function()
-		local t = angle
+		-- Центр карты — пустая вода: акулы кружат именно там, каждая на своём кольце.
+		local radius = 130 + (index % 4) * 70
+		local angle = index / cfg.COUNT * math.pi * 2
 		local phase = index * 1.3
-		-- Глубина "дышит" синусом: от -13 (глубоко) до -3 (у самой поверхности).
-		-- На пике всплытия верх тела остаётся под водой, наружу торчит только плавник.
-		local function depthAt(tt)
-			return (Config.WATER_LEVEL - 3) - (math.sin(tt * 2.2 + phase) + 1) * 5
+		local pos = Vector3.new(math.cos(angle) * radius, Config.WATER_LEVEL - 8, math.sin(angle) * radius)
+		local clock = phase
+		local biteAccum = 0
+		local hunting = false
+
+		-- Глубина «дышит» синусом: от -12.6 (глубоко) до -2.6 (у поверхности) —
+		-- на пике всплытия наружу торчит только спинной плавник.
+		local function wanderY(tt)
+			return (Config.WATER_LEVEL - 2.6) - (math.sin(tt * 0.9 + phase) + 1) * 5
 		end
+
 		while model.Parent do
-			t += 0.007
-			local y = depthAt(t)
-			local position = Vector3.new(math.cos(t) * radius, y, math.sin(t) * radius)
-			local nextPosition = Vector3.new(math.cos(t + 0.03) * radius, depthAt(t + 0.03), math.sin(t + 0.03) * radius)
-			model:PivotTo(CFrame.lookAt(position, nextPosition))
-			fin.CFrame = body.CFrame * CFrame.new(0, 3, 1) * CFrame.Angles(0, 0, math.rad(45))
-			tail.CFrame = body.CFrame * CFrame.new(0, 0, 7)
-			task.wait(0.05)
+			local dt = task.wait(0.05)
+			clock += dt
+
+			local prey = findPrey(pos)
+			local targetPos, speed
+			if prey then
+				hunting = true
+				-- Грызём снизу: цель чуть под игроком, но не выше «наружу только плавник».
+				local py = math.clamp(prey.Position.Y - 1, Config.SEABED_LEVEL + 6, Config.WATER_LEVEL - 2)
+				targetPos = Vector3.new(prey.Position.X, py, prey.Position.Z)
+				speed = cfg.HUNT_SPEED
+			else
+				if hunting then
+					-- Погоня кончилась: пересинхронизируем кольцо с текущей точкой,
+					-- чтобы акула плавно вернулась на маршрут без телепорта.
+					hunting = false
+					angle = math.atan2(pos.Z, pos.X)
+				end
+				angle += (cfg.SWIM_SPEED / radius) * dt
+				targetPos = Vector3.new(math.cos(angle) * radius, wanderY(clock), math.sin(angle) * radius)
+				speed = cfg.SWIM_SPEED * 1.6 -- запас, чтобы не отставать от точки на кольце
+			end
+
+			local delta = targetPos - pos
+			local dist = delta.Magnitude
+			if dist > 0.05 then
+				local step = math.min(dist, speed * dt)
+				local dir = delta / dist
+				pos += dir * step
+				-- Наклон по вертикали приглушаем: акула не «клюёт носом».
+				model:PivotTo(CFrame.lookAt(pos, pos + Vector3.new(dir.X, dir.Y * 0.6, dir.Z)))
+			end
+			if tail then
+				tail.CFrame = root.CFrame * CFrame.new(0, 0, 8.6) * CFrame.Angles(0, math.sin(clock * 6) * 0.25, 0)
+			end
+
+			-- Укус: всем, кто В ВОДЕ и в радиусе укуса, тикает маленький урон.
+			biteAccum += dt
+			if biteAccum >= cfg.BITE_TICK then
+				biteAccum = 0
+				for _, player in ipairs(Players:GetPlayers()) do
+					local char = player.Character
+					local hrp = char and char:FindFirstChild("HumanoidRootPart")
+					local hum = char and char:FindFirstChildOfClass("Humanoid")
+					if hrp and hum and hum.Health > 0
+						and hrp.Position.Y < Config.WATER_LEVEL + 1
+						and (hrp.Position - pos).Magnitude <= cfg.BITE_RADIUS then
+						hum:TakeDamage(cfg.DPS * cfg.BITE_TICK)
+					end
+				end
+			end
 		end
 	end)
 end
@@ -144,7 +246,7 @@ local function buildOcean()
 	local world = Instance.new("Folder")
 	world.Name = "OceanWildlife"
 	world.Parent = workspace
-	for index = 1, 16 do
+	for index = 1, Config.SHARKS.COUNT do
 		buildShark(world, index)
 	end
 end
@@ -342,8 +444,12 @@ local function tryPlacePalmMesh(decor, spot, basePos, yawDeg)
 	meshPart.Size = meshPart.Size * scale
 	meshPart.Anchored = true
 	meshPart.CanCollide = true
-	meshPart.CFrame = CFrame.new(basePos + Vector3.new(0, meshPart.Size.Y / 2, 0))
-		* CFrame.Angles(0, math.rad(yawDeg), 0)
+	-- Roblox центрирует MeshPart по bbox КРОНЫ, а ствол смещён от её центра:
+	-- компенсируем spot.trunkOff, чтобы именно СТВОЛ встал в точку spot.offset
+	-- (иначе пальма кроной стоит где надо, а стволом вылезает на дорогу).
+	local yawCF = CFrame.Angles(0, math.rad(yawDeg), 0)
+	local trunkShift = yawCF:VectorToWorldSpace((spot.trunkOff or Vector3.zero) * scale)
+	meshPart.CFrame = CFrame.new(basePos - trunkShift + Vector3.new(0, meshPart.Size.Y / 2, 0)) * yawCF
 	meshPart.Parent = decor
 	return meshPart
 end
