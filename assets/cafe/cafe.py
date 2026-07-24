@@ -249,11 +249,15 @@ for i in range(9):
 FY = -(D / 2)  # плоскость фасада
 
 def window(cx, cz, w, h, mullions=1, face_y=FY, rot_z=0.0):
+    # ФИКС Z-FIGHTING: раньше внешняя грань СТЕКЛА и внешняя грань ЧЁРНОЙ РАМЫ
+    # лежали в ОДНОЙ плоскости (обе на face_y-0.10) — серое стекло мерцало с
+    # чернотой рамы «на одном пикселе». Теперь стекло ВЫПУКЛОЕ: выступает на
+    # 0.04 перед рамой (перекладины подняты ещё выше, чтобы не слиться со стеклом).
     box("WinFrame", (w + 0.16, 0.10, h + 0.16), (cx, face_y - 0.05, cz), MAT_FRAME, rot=(0, 0, rot_z))
-    box("WinGlass", (w, 0.06, h), (cx, face_y - 0.07, cz), MAT_GLASS, rot=(0, 0, rot_z))
+    box("WinGlass", (w, 0.06, h), (cx, face_y - 0.11, cz), MAT_GLASS, rot=(0, 0, rot_z))
     for k in range(mullions):
         mx = cx - w / 2 + (k + 1) * w / (mullions + 1)
-        box("WinMul", (0.07, 0.09, h), (mx, face_y - 0.09, cz), MAT_FRAME, rot=(0, 0, rot_z))
+        box("WinMul", (0.07, 0.09, h), (mx, face_y - 0.16, cz), MAT_FRAME, rot=(0, 0, rot_z))
     box("WinSill", (w + 0.3, 0.24, 0.10), (cx, face_y - 0.10, cz - h / 2 - 0.09), MAT_CONCRETE, rot=(0, 0, rot_z))
 
 # Большая витрина слева и дверь справа
@@ -301,17 +305,19 @@ cyl("SignCup", 0.26, 0.34, (2.15, FY - 0.20, 3.75), MAT_CUP, verts=16)
 torus("SignCupHandle", 0.15, 0.045, (2.46, FY - 0.20, 3.75), MAT_CUP, rot=(radians(90), 0, 0))
 cyl("SignSaucer", 0.36, 0.05, (2.15, FY - 0.20, 3.55), MAT_CUP, verts=16)
 
-# Боковые окна (по два на каждой стене)
+# Боковые окна (по два на каждой стене).
+# ФИКС Z-FIGHTING: стекло было заподлицо с рамой (внешние грани обеих на
+# ±(W/2+0.10)) и мерцало с её чернотой. Теперь стекло выступает на 0.05.
 for sy in (-1.4, 1.4):
     box("SideFrameR", (0.10, 1.6, 1.26), (W / 2 + 0.05, sy, 2.4), MAT_FRAME)
-    box("SideGlassR", (0.06, 1.44, 1.1), (W / 2 + 0.07, sy, 2.4), MAT_GLASS)
+    box("SideGlassR", (0.06, 1.44, 1.1), (W / 2 + 0.12, sy, 2.4), MAT_GLASS)
     box("SideFrameL", (0.10, 1.6, 1.26), (-(W / 2) - 0.05, sy, 2.4), MAT_FRAME)
-    box("SideGlassL", (0.06, 1.44, 1.1), (-(W / 2) - 0.07, sy, 2.4), MAT_GLASS)
+    box("SideGlassL", (0.06, 1.44, 1.1), (-(W / 2) - 0.12, sy, 2.4), MAT_GLASS)
 
-# Задняя дверь и окно
+# Задняя дверь и окно (стекло тоже выпуклое — тот же фикс z-fighting)
 box("BackDoor", (1.0, 0.08, 2.1), (-1.8, D / 2 + 0.04, 1.1), MAT_TRIM)
 box("BackWinFrame", (1.3, 0.10, 0.9), (1.6, D / 2 + 0.05, 2.5), MAT_FRAME)
-box("BackWinGlass", (1.16, 0.06, 0.76), (1.6, D / 2 + 0.07, 2.5), MAT_GLASS)
+box("BackWinGlass", (1.16, 0.06, 0.76), (1.6, D / 2 + 0.12, 2.5), MAT_GLASS)
 
 # ----------------------------------------------------------------------------
 # Крыша: кондиционер, труба-вытяжка
