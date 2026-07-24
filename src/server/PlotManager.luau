@@ -148,11 +148,66 @@ local function buildOcean()
 	end
 end
 
--- Остров = набор ВЛОЖЕННЫХ сплошных цилиндров с верхними гранями на РАЗНОЙ высоте.
--- Никаких перекрывающихся копланарных партов → нет "плавающего/дрожащего песка" (z-fighting).
+-- Остров. Если в ReplicatedStorage лежит ЛЕГО-МЕШ из Blender
+-- (IslandMeshes/MainIsland, см. assets/island/main_island.py) — используем его:
+-- зелёная стад-плита, дорога с пунктиром, газон и зона ракет с чёрно-жёлтой
+-- лентой. Иначе фолбэк: вложенные сплошные цилиндры (никаких перекрывающихся
+-- копланарных партов → нет "дрожащего песка"/z-fighting).
+local function tryBuildIslandMesh(folder, position)
+	local meshFolder = ReplicatedStorage:FindFirstChild(Config.ISLAND.FOLDER)
+	local template = meshFolder and meshFolder:FindFirstChild(Config.ISLAND.MAIN)
+	if not template then return nil end
+
+	-- Import 3D мог разбить остров на НЕСКОЛЬКО MeshPart (по материалам) внутри
+	-- Model — работаем с моделью целиком: ScaleTo + GetBoundingBox.
+	local clone = template:Clone()
+	local model
+	if clone:IsA("Model") then
+		model = clone
+	elseif clone:IsA("BasePart") then
+		model = Instance.new("Model")
+		clone.Parent = model
+	else
+		clone:Destroy()
+		return nil
+	end
+	model.Name = "MainIsland"
+
+	local anyPart = model:FindFirstChildWhichIsA("BasePart", true)
+	if not anyPart then
+		model:Destroy()
+		return nil
+	end
+	for _, p in ipairs(model:GetDescendants()) do
+		if p:IsA("BasePart") then
+			p.Anchored = true
+			p.CanCollide = true
+		end
+	end
+	if not model.PrimaryPart then model.PrimaryPart = anyPart end
+
+	local _, bbSize = model:GetBoundingBox()
+	local scale = Config.ISLAND.MAIN_WIDTH / math.max(bbSize.X, bbSize.Z, 0.001)
+	model:ScaleTo(model:GetScale() * scale)
+
+	-- YAW кладёт зону ракет (чёрно-жёлтая лента) на север, под стенды; верх меша
+	-- (зелёная плита) = уровень ходибельной поверхности острова.
+	model:PivotTo(CFrame.new(position.X, position.Y, position.Z) * CFrame.Angles(0, math.rad(Config.ISLAND.YAW), 0))
+	local bbCF, bbSize2 = model:GetBoundingBox()
+	local desired = Vector3.new(position.X, position.Y + SURFACE_OFFSET - bbSize2.Y / 2, position.Z)
+	model:TranslateBy(desired - bbCF.Position)
+	model.Parent = folder
+	return model
+end
+
 local function buildIslandBase(folder, position, sandColor)
 	local scale = Config.PLOT_CENTER_SIZE
 	local sandRadius = scale * 0.64
+
+	local islandMesh = tryBuildIslandMesh(folder, position)
+	if islandMesh then
+		return islandMesh, sandRadius
+	end
 
 	-- Подводный риф (самый широкий, спрятан под каменным шельфом)
 	makeCylinder(folder, "SubmergedReef", 20, (sandRadius * 2.3) + 12, position + Vector3.new(0, -20, 0), Color3.fromRGB(52, 73, 78), Enum.Material.Slate)
@@ -240,40 +295,45 @@ local function buildPalm(parent, basePos, yawDeg, scale)
 	return model
 end
 
--- Расставляет пальмы и камни по песчаному кольцу острова, обходя зону ракетных
--- стендов (северная полоса), точку спавна, южный коридор к трапу и центр-лужайку.
+-- Декор острова: РОВНО ДВЕ пальмы (не преувеличиваем). Blender-меши PalmA и
+-- PalmB смотрят в разные стороны (ReplicatedStorage/PalmMeshes, см.
+-- assets/palm_trees); пока мешей нет — две процедурные пальмы с разными яу.
+local function tryPlacePalmMesh(decor, name, basePos, yawDeg)
+	local meshFolder = ReplicatedStorage:FindFirstChild(Config.PALMS.FOLDER)
+	local template = meshFolder and meshFolder:FindFirstChild(name)
+	if not template then return nil end
+
+	local meshPart
+	if template:IsA("BasePart") then
+		meshPart = template:Clone()
+	elseif template:IsA("Model") then
+		local inner = template:FindFirstChildWhichIsA("MeshPart", true) or template:FindFirstChildWhichIsA("BasePart", true)
+		if inner then meshPart = inner:Clone() end
+	end
+	if not meshPart then return nil end
+
+	local scale = Config.PALMS.HEIGHT / math.max(meshPart.Size.Y, 0.001)
+	meshPart.Name = name
+	meshPart.Size = meshPart.Size * scale
+	meshPart.Anchored = true
+	meshPart.CanCollide = true
+	meshPart.CFrame = CFrame.new(basePos + Vector3.new(0, meshPart.Size.Y / 2, 0))
+		* CFrame.Angles(0, math.rad(yawDeg), 0)
+	meshPart.Parent = decor
+	return meshPart
+end
+
 local function buildIslandDecor(parent, position, plotId)
 	local decor = Instance.new("Folder")
 	decor.Name = "IslandDecor"
 	decor.Parent = parent
 
-	local spawnPos = position + Vector3.new(0, SURFACE_OFFSET, 40)
-
-	local target = 8 + (plotId % 3) -- 8..10 пальм на остров
-	local placed, attempts = 0, 0
-	while placed < target and attempts < 80 do
-		attempts += 1
-		local ang = math.random() * math.pi * 2
-		local dir = Vector3.new(math.cos(ang), 0, math.sin(ang))
-		local radius = 55 + math.random() * 34
-		local pos = position + dir * radius + Vector3.new(0, SURFACE_OFFSET, 0)
-
-		local dx = pos.X - position.X
-		local dz = pos.Z - position.Z
-		-- Полоса ракетных стендов и зелёных кругов: не сажаем пальмы внутрь.
-		local inLauncherZone = dz > -44 and dz < -8 and math.abs(dx) < 56
-		-- Южный коридор к трапу (путь с воды к спавну) держим свободным.
-		local inRampCorridor = dz > 26 and math.abs(dx) < 9
-		if not inLauncherZone and not inRampCorridor and (pos - spawnPos).Magnitude > 14 then
-			buildPalm(decor, pos, math.deg(ang) + math.random(-40, 40), 0.85 + math.random() * 0.55)
-			placed += 1
+	for _, spot in ipairs(Config.PALMS.SPOTS) do
+		local basePos = position + Vector3.new(spot.offset.X, SURFACE_OFFSET, spot.offset.Z)
+		if not tryPlacePalmMesh(decor, spot.name, basePos, spot.yaw) then
+			-- Фолбэк: процедурная пальма (яу разные — «смотрят в разные стороны»)
+			buildPalm(decor, basePos, spot.yaw, 1.1)
 		end
-	end
-
-	-- Прибрежные камни (наполовину в песке)
-	for index, offset in ipairs({ Vector3.new(86, SURFACE_OFFSET - 1, -38), Vector3.new(-84, SURFACE_OFFSET - 1, 20), Vector3.new(34, SURFACE_OFFSET - 1, 84), Vector3.new(-26, SURFACE_OFFSET - 1, -80) }) do
-		local rock = makePart(decor, "BeachRock_" .. index, Vector3.new(5 + index, 3 + index % 2, 5 + index), CFrame.new(position + offset), Color3.fromRGB(111, 105, 91), Enum.Material.Rock)
-		rock.Shape = Enum.PartType.Ball
 	end
 end
 

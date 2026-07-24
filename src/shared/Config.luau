@@ -78,15 +78,98 @@ Config.PIZZA = {
 	MAX_LEVEL = 5,
 	FOLDER = "PizzaShopMeshes",
 	WIDTH = 24,  -- ширина здания в стадах (меш масштабируется пропорционально)
-	YAW = 180,   -- доворот меша: фасад OBJ смотрит по +Z, а в игре фасад — это -Z
+	-- Доворот меша. Фасад OBJ после импорта смотрит по +Z детали, а CFrame.lookAt
+	-- целит -Z (LookVector) на центр острова. YAW = 0 → фасад смотрит ВНУТРЬ
+	-- острова (на мост). Раньше стояло 180 — пиццерия смотрела наружу, в океан.
+	YAW = 0,
 }
 
--- Максимальный уровень для конкретного слота (у пиццерии свой потолок).
+-- КАФЕ (слот 2): тот же конвейер, что у пиццерии — Blender-меши 5 состояний,
+-- уровень 1 = плесень/зелень/грязь, уровень 5 = новенькое чистое.
+-- Меши: ReplicatedStorage/CafeMeshes/Level1..Level5 (Import 3D файлов
+-- assets/cafe/cafe_lvlN.obj). Пока мешей нет — процедурный фолбэк-домик.
+Config.CAFE = {
+	MAX_LEVEL = 5,
+	FOLDER = "CafeMeshes",
+	WIDTH = 26,
+	YAW = 0, -- как у пиццерии: фасад внутрь острова
+}
+
+-- Максимальный уровень для конкретного слота (у пиццерии и кафе свои потолки).
 function Config.MaxLevelForSlot(slotIndex)
 	if slotIndex == 1 then
 		return Config.PIZZA.MAX_LEVEL
 	end
+	if slotIndex == 2 then
+		return Config.CAFE.MAX_LEVEL
+	end
 	return Config.MAX_BUILDING_LEVEL
+end
+
+-- ЛЕГО-ОСТРОВА из Blender (assets/island): главный остров и под-острова домов.
+-- Меши: ReplicatedStorage/IslandMeshes/MainIsland и SubIsland (Import 3D).
+-- Пока мешей нет — процедурные песчаные цилиндры (фолбэк).
+Config.ISLAND = {
+	FOLDER = "IslandMeshes",
+	MAIN = "MainIsland",
+	SUB = "SubIsland",
+	MAIN_WIDTH = 205, -- ширина главного острова в стадах
+	SUB_WIDTH = 60,   -- ширина под-острова дома
+	-- Доворот главного острова: в меше зона ракет (чёрно-жёлтая лента) справа
+	-- (+X), а стенды ракет в игре стоят на СЕВЕРЕ (-Z). YAW = 90 кладёт зону
+	-- точно под стенды, газон уходит на юг к спавну.
+	YAW = 90,
+}
+
+-- ЛЕГО-ПАЛЬМЫ из Blender (assets/palm_trees): ровно ДВЕ пальмы на главном
+-- острове (PalmA и PalmB смотрят в разные стороны). Меши:
+-- ReplicatedStorage/PalmMeshes/PalmA и PalmB. Фолбэк — процедурные пальмы.
+Config.PALMS = {
+	FOLDER = "PalmMeshes",
+	HEIGHT = 24, -- высота пальмы в стадах
+	SPOTS = {
+		{ name = "PalmA", offset = Vector3.new(-58, 0, 46), yaw = 15 },
+		{ name = "PalmB", offset = Vector3.new(52, 0, 62), yaw = 205 },
+	},
+}
+
+-- ПВО-МИНИГАН (assets/air_defense): сбивает вражеские ракеты на подлёте.
+-- Покупка/прокачка — зелёный круг рядом с турелью (на газоне). Уровень растёт →
+-- турель стреляет ЧАЩЕ и попадает ЧАЩЕ, но гарантий нет: может сбить, а может
+-- и промазать. Меши: ReplicatedStorage/AirDefenseMeshes/{Base,Head,Barrels}
+-- (Import 3D частей air_defense_*.obj), фолбэк — процедурная турель.
+Config.AIR_DEFENSE = {
+	MAX_LEVEL = 5,
+	COST = 750,                 -- покупка турели
+	UPGRADE_BASE = 900,         -- цена прокачки до ур.2
+	UPGRADE_MULT = 1.65,        -- геометрический рост цены
+	FIRE_INTERVAL = { 1.40, 1.05, 0.75, 0.50, 0.30 }, -- сек между выстрелами
+	HIT_CHANCE = { 0.18, 0.24, 0.30, 0.36, 0.42 },    -- шанс сбить за выстрел
+	RANGE = 230,                -- радиус перехвата от турели (в стадах)
+	OFFSET = Vector3.new(-34, 0, 44), -- позиция на газоне (юго-запад от центра)
+	HEIGHT = 14,                -- высота турели в стадах
+	FOLDER = "AirDefenseMeshes",
+	-- Геометрия Blender-мешей (в юнитах меша, см. assets/air_defense):
+	-- пивот башни/стволов и смещения bbox — чтобы собрать три части в турель.
+	MESH = {
+		TOTAL_H = 11.6,                        -- полная высота турели в юнитах
+		HEAD_PIVOT_Z = 8.1,                    -- высота пивота башни
+		BARREL_PIVOT = Vector3.new(0, 0, 4.6), -- пивот стволов от пивота башни (+Z = вперёд)
+		MUZZLE = Vector3.new(0, 0, 8.0),       -- дуло от пивота стволов
+		-- bbox-центры частей относительно их пивотов (числа из экспортных OBJ:
+		-- Roblox центрирует MeshPart по bbox, поэтому ставим детали со сдвигом).
+		BASE_BB = Vector3.new(0, 3.400, 0),
+		HEAD_BB = Vector3.new(0.526, 1.305, 0.312),
+		BARR_BB = Vector3.new(0, 0, 3.972),
+	},
+}
+
+-- Стоимость прокачки ПВО до уровня nextLevel (nextLevel >= 2).
+function Config.AirDefenseUpgradeCost(nextLevel)
+	if nextLevel < 2 or nextLevel > Config.AIR_DEFENSE.MAX_LEVEL then
+		return math.huge
+	end
+	return math.floor(Config.AIR_DEFENSE.UPGRADE_BASE * (Config.AIR_DEFENSE.UPGRADE_MULT ^ (nextLevel - 2)) + 0.5)
 end
 
 -- Запуск ракеты: игрок подходит к своей установке и удерживает E, после чего камера
@@ -106,7 +189,9 @@ Config.FARM_TYPES = {
 		material = Enum.Material.SmoothPlastic,
 	},
 	[2] = {
-		name = "Прибрежный коттедж",
+		-- Бывший «Прибрежный коттедж»: теперь это КАФЕ с Blender-мешами 5 уровней
+		-- (уровень 1 = плесень и грязь, уровень 5 = новенькое).
+		name = "Кафе",
 		cost = 500,
 		income = 60,
 		maxHp = 280,

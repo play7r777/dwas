@@ -20,6 +20,16 @@ local RocketManager = {}
 local launcherReady = {}
 local lastRequest = {}
 
+-- Реестр ЛЕТЯЩИХ ракет для ПВО: [model] = { pos, targetPlotId, shotDown, mark }.
+-- AirDefenseManager каждый тик читает реестр и, если ракета летит на его остров
+-- и вошла в радиус, стреляет по ней; попадание выставляет rec.shotDown = true,
+-- и полётный цикл взрывает ракету В ВОЗДУХЕ (урона по зданиям нет).
+local activeRockets = {}
+
+function RocketManager.GetActiveRockets()
+	return activeRockets
+end
+
 -- Анти-двойное срабатывание зелёных кругов: после покупки/прокачки игрок обязан
 -- СОЙТИ с круга, прежде чем тот сработает снова (фикс «стоит 410, списалось ~700»).
 local padLock = {} -- [key] = { player, pos, radius }
@@ -126,9 +136,21 @@ end
 
 -- Спавнит ракету, ведёт её по баллистической дуге на сервере, просит клиента
 -- стрелка вести камеру за этим инстансом, затем вызывает onImpact в точке удара.
-local function flyRocket(shooter, originPos, targetPos, mark, teamColor, onImpact)
+-- Если ПВО цели выставило shotDown — ракета взрывается В ВОЗДУХЕ (onImpact не
+-- вызывается, вместо него onIntercepted с точкой подрыва).
+local function flyRocket(shooter, originPos, targetPos, targetPlotId, mark, teamColor, onImpact, onIntercepted)
 	local model = buildFlyingRocket(originPos, mark, teamColor)
 	model.Parent = workspace
+
+	local rec = {
+		model = model,
+		pos = originPos,
+		targetPlotId = targetPlotId,
+		shooter = shooter,
+		mark = mark,
+		shotDown = false,
+	}
+	activeRockets[model] = rec
 
 	-- Клиенту-стрелку сообщаем, какую ракету вести камерой.
 	if shooter and shooter.Parent then
@@ -141,11 +163,20 @@ local function flyRocket(shooter, originPos, targetPos, mark, teamColor, onImpac
 		local dist = (targetPos - originPos).Magnitude
 		local duration = math.clamp(dist / Config.ROCKET_SPEED, 0.9, Config.ROCKET_ANIM_TIME)
 		local elapsed = 0
+		local intercepted = false
+		local lastPos = originPos
 		while elapsed < duration and model.Parent do
 			local dt = RunService.Heartbeat:Wait()
 			elapsed += dt
 			local t = math.clamp(elapsed / duration, 0, 1)
 			local pos = arcPos(originPos, targetPos, t)
+			lastPos = pos
+			rec.pos = pos
+			if rec.shotDown then
+				-- ПВО попало: подрыв в текущей точке дуги.
+				intercepted = true
+				break
+			end
 			local nextPos = arcPos(originPos, targetPos, math.min(t + 0.04, 1))
 			local dir = nextPos - pos
 			if dir.Magnitude > 0.001 then
@@ -164,8 +195,13 @@ local function flyRocket(shooter, originPos, targetPos, mark, teamColor, onImpac
 				end
 			end
 		end
+		activeRockets[model] = nil
 		model:Destroy()
-		if onImpact then onImpact() end
+		if intercepted then
+			if onIntercepted then onIntercepted(lastPos) end
+		elseif onImpact then
+			onImpact()
+		end
 	end)
 end
 
@@ -395,7 +431,7 @@ function RocketManager.Init()
 			impactPos = targetPlot.center + Vector3.new((math.random() - 0.5) * 30, 10, (math.random() - 0.5) * 30)
 		end
 
-		flyRocket(player, originPos, impactPos, mark, teamColor, function()
+		flyRocket(player, originPos, impactPos, targetPlotId, mark, teamColor, function()
 			-- Авторитетный прилёт: урон/оглушение зданий считает сервер.
 			local destroyed = FarmManager.ApplyRocketImpact(targetPlotId, impactPos, damage)
 			Remotes.Get("RocketImpact"):FireAllClients({
@@ -405,6 +441,21 @@ function RocketManager.Init()
 				shooterUserId = player.UserId,
 				targetPlotId = targetPlotId,
 			})
+		end, function(airPos)
+			-- Ракету сбило ПВО: взрыв в воздухе, зданиям урона НЕТ.
+			Remotes.Get("RocketImpact"):FireAllClients({
+				pos = airPos,
+				destroyed = false,
+				intercepted = true,
+				shooterName = player.DisplayName,
+				shooterUserId = player.UserId,
+				targetPlotId = targetPlotId,
+			})
+			notify(player, "Вашу ракету сбило ПВО!", "error")
+			local defender = PlotManager.GetPlayerByPlot(targetPlotId)
+			if defender then
+				notify(defender, "ПВО сбило вражескую ракету!", "success")
+			end
 		end)
 	end)
 end

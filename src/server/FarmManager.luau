@@ -74,27 +74,70 @@ local function buildTerritory(plotId, slotIndex)
 		support.Parent = territoryFolder
 	end
 
-	local bottom = Instance.new("Part")
-	bottom.Name = "RockBottom"
-	bottom.Anchored = true
-	bottom.Shape = Enum.PartType.Cylinder
-	bottom.Size = Vector3.new(22, Config.SLOT_PLATFORM_SIZE * 0.9, Config.SLOT_PLATFORM_SIZE * 0.9)
-	bottom.Orientation = Vector3.new(0, 0, 90)
-	bottom.Position = center - Vector3.new(0, 2, 0)
-	bottom.Color = Color3.fromRGB(81, 78, 69)
-	bottom.Material = Enum.Material.Rock
-	bottom.Parent = territoryFolder
+	-- ПОД-ОСТРОВ: если в ReplicatedStorage лежит лего-меш из Blender
+	-- (IslandMeshes/SubIsland, см. assets/island/sub_island.py) — используем его.
+	-- Иначе процедурный фолбэк: каменный цилиндр + песчаный верх.
+	local subMesh
+	local meshFolder = ReplicatedStorage:FindFirstChild(Config.ISLAND.FOLDER)
+	local subTemplate = meshFolder and meshFolder:FindFirstChild(Config.ISLAND.SUB)
+	if subTemplate then
+		-- Import 3D мог разбить меш на несколько частей (по материалам) — работаем
+		-- с Model целиком (ScaleTo + GetBoundingBox), как у главного острова.
+		local clone = subTemplate:Clone()
+		local model
+		if clone:IsA("Model") then
+			model = clone
+		elseif clone:IsA("BasePart") then
+			model = Instance.new("Model")
+			clone.Parent = model
+		end
+		if model and model:FindFirstChildWhichIsA("BasePart", true) then
+			model.Name = "SubIsland"
+			for _, p in ipairs(model:GetDescendants()) do
+				if p:IsA("BasePart") then
+					p.Anchored = true
+					p.CanCollide = true
+				end
+			end
+			if not model.PrimaryPart then
+				model.PrimaryPart = model:FindFirstChildWhichIsA("BasePart", true)
+			end
+			local _, bb = model:GetBoundingBox()
+			local scale = Config.ISLAND.SUB_WIDTH / math.max(bb.X, bb.Z, 0.001)
+			model:ScaleTo(model:GetScale() * scale)
+			model:PivotTo(CFrame.new(center.X, center.Y, center.Z))
+			local bbCF, bb2 = model:GetBoundingBox()
+			-- Верх меша (газон) на уровне песка площадки: center.Y + 9.5
+			model:TranslateBy(Vector3.new(center.X, center.Y + 9.5 - bb2.Y / 2, center.Z) - bbCF.Position)
+			model.Parent = territoryFolder
+			subMesh = model
+		elseif model then
+			model:Destroy()
+		end
+	end
+	if not subMesh then
+		local bottom = Instance.new("Part")
+		bottom.Name = "RockBottom"
+		bottom.Anchored = true
+		bottom.Shape = Enum.PartType.Cylinder
+		bottom.Size = Vector3.new(22, Config.SLOT_PLATFORM_SIZE * 0.9, Config.SLOT_PLATFORM_SIZE * 0.9)
+		bottom.Orientation = Vector3.new(0, 0, 90)
+		bottom.Position = center - Vector3.new(0, 2, 0)
+		bottom.Color = Color3.fromRGB(81, 78, 69)
+		bottom.Material = Enum.Material.Rock
+		bottom.Parent = territoryFolder
 
-	local top = Instance.new("Part")
-	top.Name = "IslandTop"
-	top.Anchored = true
-	top.Shape = Enum.PartType.Cylinder
-	top.Size = Vector3.new(7, Config.SLOT_PLATFORM_SIZE, Config.SLOT_PLATFORM_SIZE)
-	top.Orientation = Vector3.new(0, 0, 90)
-	top.Position = center + Vector3.new(0, 6, 0)
-	top.Color = Color3.fromRGB(240, 202, 116) -- тёплый золотистый песок
-	top.Material = Enum.Material.Sand
-	top.Parent = territoryFolder
+		local top = Instance.new("Part")
+		top.Name = "IslandTop"
+		top.Anchored = true
+		top.Shape = Enum.PartType.Cylinder
+		top.Size = Vector3.new(7, Config.SLOT_PLATFORM_SIZE, Config.SLOT_PLATFORM_SIZE)
+		top.Orientation = Vector3.new(0, 0, 90)
+		top.Position = center + Vector3.new(0, 6, 0)
+		top.Color = Color3.fromRGB(240, 202, 116) -- тёплый золотистый песок
+		top.Material = Enum.Material.Sand
+		top.Parent = territoryFolder
+	end
 
 	-- === Мини-городок вокруг будущего дома: дорожка, фонари, кусты ===
 	local up = Vector3.new(0, 1, 0)
@@ -171,15 +214,20 @@ local TIER_STYLES = {
 	},
 }
 
--- ПИЦЦЕРИЯ (слот 1): клонирует Blender-меш нужного уровня чистоты из
--- ReplicatedStorage/PizzaShopMeshes/Level1..Level5 (см. Config.PIZZA).
--- MeshId нельзя задать из скрипта в рантайме, поэтому меши должны лежать
--- в Studio заранее (Import 3D). Вернёт nil, если мешей ещё нет — тогда
--- сыграет процедурный фолбэк ниже.
-local function tryBuildPizzaMesh(plot, slotIndex, level, territoryFolder)
-	local meshFolder = ReplicatedStorage:FindFirstChild(Config.PIZZA.FOLDER)
+-- ЗДАНИЯ ИЗ BLENDER-МЕШЕЙ. Слот 1 — ПИЦЦЕРИЯ (PizzaShopMeshes), слот 2 — КАФЕ
+-- (CafeMeshes): по 5 уровней чистоты Level1..Level5 в ReplicatedStorage
+-- (уровень 1 = грязь/плесень, уровень 5 = новенькое). MeshId нельзя задать из
+-- скрипта в рантайме, поэтому меши должны лежать в Studio заранее (Import 3D).
+-- Вернёт nil, если мешей ещё нет — тогда сыграет процедурный фолбэк ниже.
+local MESH_BUILDINGS = {
+	[1] = Config.PIZZA,
+	[2] = Config.CAFE,
+}
+
+local function tryBuildLevelMesh(meshCfg, plot, slotIndex, level, territoryFolder)
+	local meshFolder = ReplicatedStorage:FindFirstChild(meshCfg.FOLDER)
 	if not meshFolder then return nil end
-	local visLevel = math.clamp(level, 1, Config.PIZZA.MAX_LEVEL)
+	local visLevel = math.clamp(level, 1, meshCfg.MAX_LEVEL)
 	local template = meshFolder:FindFirstChild("Level" .. visLevel)
 	if not template then return nil end
 
@@ -199,17 +247,19 @@ local function tryBuildPizzaMesh(plot, slotIndex, level, territoryFolder)
 	model.Parent = territoryFolder
 
 	-- Пропорциональный масштаб до игровой ширины
-	local scale = Config.PIZZA.WIDTH / math.max(meshPart.Size.X, 0.001)
-	meshPart.Name = "PizzaShop"
+	local scale = meshCfg.WIDTH / math.max(meshPart.Size.X, 0.001)
+	meshPart.Name = "BuildingMesh"
 	meshPart.Size = meshPart.Size * scale
 	meshPart.Anchored = true
 	meshPart.CanCollide = true
 
-	-- Ставим на песок площадки фасадом к центру острова (к мосту)
+	-- Ставим на песок площадки ФАСАДОМ ВНУТРЬ острова (к мосту): lookAt целит
+	-- LookVector (-Z) на центр, фасад меша после импорта — +Z, YAW=0 разворачивает
+	-- его внутрь (см. Config.PIZZA.YAW).
 	local sandTop = plot.slots[slotIndex].center + Vector3.new(0, 9.5, 0)
 	local pos = Vector3.new(sandTop.X, sandTop.Y + meshPart.Size.Y / 2, sandTop.Z)
 	local lookAt = Vector3.new(plot.center.X, pos.Y, plot.center.Z)
-	meshPart.CFrame = CFrame.lookAt(pos, lookAt) * CFrame.Angles(0, math.rad(Config.PIZZA.YAW), 0)
+	meshPart.CFrame = CFrame.lookAt(pos, lookAt) * CFrame.Angles(0, math.rad(meshCfg.YAW), 0)
 	meshPart.Parent = model
 
 	return model, meshPart
@@ -220,11 +270,12 @@ end
 local function buildBuildingModel(plotId, slotIndex, tier, level, territoryFolder)
 	local plot = PlotManager.GetPlot(plotId)
 
-	-- Слот 1 — пиццерия из Blender-мешей (5 уровней: грязная → чистая).
-	if tier == 1 then
-		local pizzaModel, pizzaMesh = tryBuildPizzaMesh(plot, slotIndex, level, territoryFolder)
-		if pizzaModel then
-			return pizzaModel, pizzaMesh, nil, nil
+	-- Слот 1 — пиццерия, слот 2 — кафе: Blender-меши 5 уровней (грязное → чистое).
+	local meshCfg = MESH_BUILDINGS[tier]
+	if meshCfg then
+		local meshModel, meshPart = tryBuildLevelMesh(meshCfg, plot, slotIndex, level, territoryFolder)
+		if meshModel then
+			return meshModel, meshPart, nil, nil
 		end
 		-- Мешей в ReplicatedStorage ещё нет — временно строим процедурный домик.
 	end

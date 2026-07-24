@@ -19,6 +19,7 @@ local function defaultData()
 		money = Config.START_MONEY,
 		launchers = Config.START_LAUNCHERS,
 		rocketLevels = { 1 },
+		airDefense = 0, -- уровень ПВО: 0 = не куплено, 1..MAX_LEVEL
 		animEnabled = true,
 	}
 end
@@ -39,6 +40,7 @@ local function load(player)
 		for index = 1, data.launchers do
 			data.rocketLevels[index] = math.clamp(tonumber(savedLevels[index]) or 1, 1, Config.MAX_ROCKET_LEVEL)
 		end
+		data.airDefense = math.clamp(tonumber(saved.airDefense) or 0, 0, Config.AIR_DEFENSE.MAX_LEVEL)
 	end
 
 	local ok2, animVal = pcall(function()
@@ -57,7 +59,12 @@ local function save(player)
 	local uid = tostring(player.UserId)
 	pcall(function()
 		moneyStore:UpdateAsync(uid, function()
-			return { money = data.money, launchers = data.launchers, rocketLevels = data.rocketLevels }
+			return {
+				money = data.money,
+				launchers = data.launchers,
+				rocketLevels = data.rocketLevels,
+				airDefense = data.airDefense,
+			}
 		end)
 	end)
 	pcall(function()
@@ -168,6 +175,40 @@ function DataManager.UpgradeLauncher(player, index)
 	return true, level + 1
 end
 
+-- === ПВО ===
+
+function DataManager.GetAirDefenseLevel(player)
+	local data = playerData[player]
+	return data and data.airDefense or 0
+end
+
+-- Покупка турели ПВО (уровень 0 → 1). Возвращает (true, 1) либо (false, причина).
+function DataManager.BuyAirDefense(player)
+	local data = playerData[player]
+	if not data then return false, "Данные игрока загружаются" end
+	if data.airDefense >= 1 then return false, "ПВО уже построено" end
+	local cost = Config.AIR_DEFENSE.COST
+	if data.money < cost then return false, string.format("Нужно ещё $%d", cost - data.money) end
+	data.money -= cost
+	data.airDefense = 1
+	DataManager.SendUpdate(player)
+	return true, 1
+end
+
+-- Прокачка ПВО на +1 уровень. Возвращает (true, новыйУровень) либо (false, причина).
+function DataManager.UpgradeAirDefense(player)
+	local data = playerData[player]
+	if not data then return false, "Данные игрока загружаются" end
+	if data.airDefense < 1 then return false, "Сначала постройте ПВО" end
+	if data.airDefense >= Config.AIR_DEFENSE.MAX_LEVEL then return false, "Максимальный уровень ПВО" end
+	local cost = Config.AirDefenseUpgradeCost(data.airDefense + 1)
+	if data.money < cost then return false, string.format("Нужно ещё $%d", cost - data.money) end
+	data.money -= cost
+	data.airDefense += 1
+	DataManager.SendUpdate(player)
+	return true, data.airDefense
+end
+
 function DataManager.SendUpdate(player)
 	local data = playerData[player]
 	if not data then return end
@@ -176,6 +217,7 @@ function DataManager.SendUpdate(player)
 		money = data.money,
 		launchers = data.launchers,
 		rocketLevels = data.rocketLevels,
+		airDefense = data.airDefense,
 		animEnabled = data.animEnabled,
 	})
 end
