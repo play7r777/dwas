@@ -92,4 +92,30 @@ bpy.ops.wm.obj_export(
 tris = sum(len(p.vertices) - 2 for o in parts for p in o.data.polygons)
 h = max(zs) - minz
 print("EXPORTED:", obj_path, "objects=%d tris=%d height=%.2f" % (len(parts), tris, h))
+
+# --- Патчим MTL: Blender не пишет Kd при подключённой текстуре, а превью
+# Roblox для ЦЕЛОЙ модели текстуры не применяет и без Kd рендерит тёмный
+# монотон. Дописываем базовый цвет каждому материалу — превью становится
+# цветным, на текстуры это не влияет. ---
+MTL_KD = {
+    "M_grass": (86, 165, 54), "M_sidewalk": (206, 208, 204),
+    "M_asphalt": (62, 64, 68), "M_concrete": (148, 150, 149),
+    "M_sand": (238, 192, 104), "M_sand2": (226, 176, 88),
+    "M_f_green": (58, 122, 38), "M_f_sand": (216, 166, 82),
+    "M_f_cliff": (196, 148, 70), "M_f_rock": (88, 90, 94),
+    "M_f_gray": (168, 170, 168), "M_f_asphalt": (48, 50, 54),
+    "M_f_black": (26, 27, 29), "M_f_yellow": (247, 200, 20),
+}
+mtl_path = obj_path[:-4] + ".mtl"
+lines_out = []
+for line in open(mtl_path, encoding="utf-8"):
+    lines_out.append(line)
+    if line.startswith("newmtl "):
+        name = line.split()[1].strip()
+        rgb = MTL_KD.get(name)
+        if rgb:
+            lines_out.append("Kd %.6f %.6f %.6f\n" % (rgb[0] / 255, rgb[1] / 255, rgb[2] / 255))
+with open(mtl_path, "w", encoding="utf-8") as f:
+    f.writelines(lines_out)
+print("MTL PATCHED:", mtl_path)
 print("EXPORT DONE")
