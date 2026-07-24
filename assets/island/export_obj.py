@@ -38,7 +38,7 @@ for obj in list(bpy.data.objects):
     if obj.type == 'MESH' and obj.name.startswith("PRV_"):
         bpy.data.objects.remove(obj, do_unlink=True)
 
-# --- Джойним все части острова в один объект ---
+# --- Джойним все части острова в один объект... ---
 meshes = [o for o in bpy.data.objects if o.type == 'MESH']
 bpy.ops.object.select_all(action='DESELECT')
 for o in meshes:
@@ -46,24 +46,50 @@ for o in meshes:
 bpy.context.view_layer.objects.active = meshes[0]
 bpy.ops.object.join()
 isl = bpy.context.object
-isl.name = "MainIsland" if KIND == "main" else "SubIsland"
 bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
 
-# --- Центрируем: XY-центр в origin, НИЗ на z=0 (верх = высота меша) ---
-bb = [Vector(c) for c in isl.bound_box]
-cx = (min(v.x for v in bb) + max(v.x for v in bb)) / 2
-cy = (min(v.y for v in bb) + max(v.y for v in bb)) / 2
-minz = min(v.z for v in bb)
-isl.data.transform(Matrix.Translation((-cx, -cy, -minz)))
+# --- ...и РАЗРЕЗАЕМ ПО МАТЕРИАЛАМ на отдельные объекты. ---
+# Roblox Import 3D не умеет мульти-материальный объект: MeshPart несёт ОДНУ
+# текстуру, и весь остров заливался одним материалом (жёлтым). Один объект =
+# один материал → Studio соберёт Model из MeshPart'ов, каждый со своей текстурой.
+bpy.ops.object.mode_set(mode='EDIT')
+bpy.ops.mesh.select_all(action='SELECT')
+bpy.ops.mesh.separate(type='MATERIAL')
+bpy.ops.object.mode_set(mode='OBJECT')
+
+parts = [o for o in bpy.data.objects if o.type == 'MESH']
+for o in parts:
+    if len(o.data.polygons) == 0:
+        bpy.data.objects.remove(o, do_unlink=True)
+        continue
+    mat = o.data.materials[o.data.polygons[0].material_index]
+    o.name = mat.name if mat else "part"
+
+parts = [o for o in bpy.data.objects if o.type == 'MESH']
+
+# --- Общее центрирование: XY-центр в origin, НИЗ на z=0 (верх = высота меша) ---
+xs, ys, zs = [], [], []
+for o in parts:
+    for c in o.bound_box:
+        v = o.matrix_world @ Vector(c)
+        xs.append(v.x); ys.append(v.y); zs.append(v.z)
+cx = (min(xs) + max(xs)) / 2
+cy = (min(ys) + max(ys)) / 2
+minz = min(zs)
+for o in parts:
+    o.data.transform(Matrix.Translation((-cx, -cy, -minz)))
 
 obj_path = os.path.join(EXPORT_DIR, "%s_island.obj" % KIND)
+bpy.ops.object.select_all(action='DESELECT')
+for o in parts:
+    o.select_set(True)
 bpy.ops.wm.obj_export(
     filepath=obj_path,
     export_selected_objects=True,
     export_materials=True,
     path_mode='RELATIVE',
 )
-tris = sum(len(p.vertices) - 2 for p in isl.data.polygons)
-h = max(v.z for v in [Vector(c) for c in isl.bound_box])
-print("EXPORTED:", obj_path, "tris=%d height=%.2f" % (tris, h))
+tris = sum(len(p.vertices) - 2 for o in parts for p in o.data.polygons)
+h = max(zs) - minz
+print("EXPORTED:", obj_path, "objects=%d tris=%d height=%.2f" % (len(parts), tris, h))
 print("EXPORT DONE")
