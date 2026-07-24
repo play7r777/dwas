@@ -198,30 +198,43 @@ local function tryBuildIslandMesh(folder, position)
 	local bbCF, bbSize2 = model:GetBoundingBox()
 	local desired = Vector3.new(position.X, position.Y + SURFACE_OFFSET - bbSize2.Y / 2, position.Z)
 	model:TranslateBy(desired - bbCF.Position)
+	-- Если меши импортировали без текстур (белые) — красим парты запасными
+	-- цветами по имени материала, остров всё равно выглядит правильно.
+	MeshLibrary.ApplyFallbackColors(model)
 	model.Parent = folder
 	return model
 end
 
+-- СТАРЫХ КРУГЛЫХ ОСТРОВОВ БОЛЬШЕ НЕТ. Основной путь — лего-меш из Blender
+-- (main_island). Если меш не импортирован — минимальный КВАДРАТНЫЙ лего-остров
+-- из партов (зелёная плита + песочная кайма + ступени обрыва), чтобы игра
+-- работала, а стиль не ломался.
 local function buildIslandBase(folder, position, sandColor)
-	local scale = Config.PLOT_CENTER_SIZE
-	local sandRadius = scale * 0.64
+	local sandRadius = Config.PLOT_CENTER_SIZE * 0.64
 
 	local islandMesh = tryBuildIslandMesh(folder, position)
 	if islandMesh then
 		return islandMesh, sandRadius
 	end
 
-	-- Подводный риф (самый широкий, спрятан под каменным шельфом)
-	makeCylinder(folder, "SubmergedReef", 20, (sandRadius * 2.3) + 12, position + Vector3.new(0, -20, 0), Color3.fromRGB(52, 73, 78), Enum.Material.Slate)
-	-- Каменный шельф (верх +4 относительно position.Y)
-	makeCylinder(folder, "RockShelf", 16, sandRadius * 2.14, position + Vector3.new(0, -4, 0), Color3.fromRGB(92, 87, 75), Enum.Material.Rock)
-	-- Песчаная поверхность единым партом (верх = position.Y + SURFACE_OFFSET)
-	local sand = makeCylinder(folder, "SandShore", 8, sandRadius * 2, position + Vector3.new(0, SURFACE_OFFSET - 4, 0), sandColor, Enum.Material.Sand)
-	-- Зелёная лужайка в центре острова (площадь "городка"): нижняя грань чуть выше
-	-- песка, чтобы не было копланарных граней.
-	makeCylinder(folder, "TownLawn", 0.3, sandRadius, position + Vector3.new(0, SURFACE_OFFSET + 0.2, 0), Color3.fromRGB(118, 178, 92), Enum.Material.Grass)
+	warn(string.format("[PlotManager] Меш острова (main_island) не найден в ReplicatedStorage — строю простой квадратный фолбэк. См. assets/IMPORT_GUIDE.md"))
 
-	return sand, sandRadius
+	local size = Config.ISLAND.MAIN_WIDTH
+	-- Зелёная стад-плита (верх = position.Y + SURFACE_OFFSET)
+	local green = makePart(folder, "GreenPlate", Vector3.new(size, 2.4, size),
+		CFrame.new(position + Vector3.new(0, SURFACE_OFFSET - 1.2, 0)), Color3.fromRGB(86, 165, 54), Enum.Material.SmoothPlastic)
+	-- Песочная кайма чуть ниже и шире
+	makePart(folder, "SandRim", Vector3.new(size + 22, 2.4, size + 22),
+		CFrame.new(position + Vector3.new(0, SURFACE_OFFSET - 3.0, 0)), sandColor, Enum.Material.SmoothPlastic)
+	-- Ступени обрыва в воду + каменное дно
+	makePart(folder, "CliffStep1", Vector3.new(size + 12, 8, size + 12),
+		CFrame.new(position + Vector3.new(0, SURFACE_OFFSET - 8.4, 0)), Color3.fromRGB(226, 176, 88), Enum.Material.SmoothPlastic)
+	makePart(folder, "CliffStep2", Vector3.new(size - 6, 8, size - 6),
+		CFrame.new(position + Vector3.new(0, SURFACE_OFFSET - 16.4, 0)), Color3.fromRGB(196, 148, 70), Enum.Material.SmoothPlastic)
+	makePart(folder, "RockBase", Vector3.new(size - 26, 6, size - 26),
+		CFrame.new(position + Vector3.new(0, SURFACE_OFFSET - 23.4, 0)), Color3.fromRGB(88, 90, 94), Enum.Material.Slate)
+
+	return green, sandRadius
 end
 
 -- Деревянный трап с воды на южный берег: выпал за остров — заплыл к трапу
@@ -607,8 +620,25 @@ function PlotManager.CreateLauncher(player, launcherIndex, level)
 	local rim = makeCylinder(model, "ReadyRim", 0.5, 14.4, basePos + Vector3.new(0, 0.66, 0), teamColor, Enum.Material.Neon)
 	rim.CanCollide = false
 
-	-- Сама ракета — из общего конструктора (та же геометрия, что у летящей).
-	local parts, window, height = RocketFactory.Build(model, CFrame.new(basePos + Vector3.new(0, 0.65, 0)), teamColor, mark, 1, true)
+	-- Стенд: ЛЕГО-МЕШ ракеты (rocket_mkN из Blender, чем выше Mark — тем крупнее),
+	-- та же высота, что у процедурной, чтобы точка старта не поехала.
+	-- Фолбэк — общий конструктор RocketFactory (как у летящей ракеты).
+	local parts, window, height
+	local meshRocket = MeshLibrary.FindPart(Config.ROCKETS.FOLDER, { "Mk" .. mark, "rocket_mk" .. mark })
+	if meshRocket then
+		height = RocketFactory.GetHeight(mark, 1)
+		local scale = height / math.max(meshRocket.Size.Y, 0.001)
+		meshRocket.Name = "RocketMesh"
+		meshRocket.Size = meshRocket.Size * scale
+		meshRocket.Anchored = true
+		meshRocket.CanCollide = true
+		meshRocket.CFrame = CFrame.new(basePos + Vector3.new(0, 0.65 + meshRocket.Size.Y / 2, 0))
+		meshRocket.Parent = model
+		parts = { meshRocket }
+		window = nil
+	else
+		parts, window, height = RocketFactory.Build(model, CFrame.new(basePos + Vector3.new(0, 0.65, 0)), teamColor, mark, 1, true)
+	end
 	local origin = Vector3.new(basePos.X, basePos.Y + 0.65 + height + 2, basePos.Z)
 
 	-- Запуск идёт через прицел (клавиша E на стенде), см. HudManager.

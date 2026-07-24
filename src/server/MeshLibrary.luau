@@ -61,4 +61,47 @@ function MeshLibrary.FindPart(folderName, candidates)
 	return nil
 end
 
+-- === Страховка по текстурам ===
+-- Если меш импортировали БЕЗ текстур (PNG не были раскодированы из .b64 на
+-- момент Import 3D), MeshPart.TextureID пуст и остров стоит белым. Красим
+-- такие парты запасными цветами по ИМЕНИ материала (Import 3D разбивает
+-- мульти-материальный OBJ на парты с именами материалов: M_grass, M_sand...).
+-- С настоящими текстурами функция ничего не трогает.
+local FALLBACK_COLORS = {
+	{ "yellow",   Color3.fromRGB(247, 200, 20) },
+	{ "black",    Color3.fromRGB(26, 27, 29) },
+	{ "asphalt",  Color3.fromRGB(62, 64, 68) },
+	{ "sidewalk", Color3.fromRGB(206, 208, 204) },
+	{ "concrete", Color3.fromRGB(148, 150, 149) },
+	{ "grass",    Color3.fromRGB(86, 165, 54) },
+	{ "green",    Color3.fromRGB(58, 122, 38) },
+	{ "sand2",    Color3.fromRGB(226, 176, 88) },
+	{ "cliff",    Color3.fromRGB(196, 148, 70) },
+	{ "sand",     Color3.fromRGB(222, 176, 92) },
+	{ "rock",     Color3.fromRGB(88, 90, 94) },
+	{ "gray",     Color3.fromRGB(168, 170, 168) },
+}
+
+function MeshLibrary.ApplyFallbackColors(root)
+	local function paint(part)
+		if not part:IsA("MeshPart") then return end
+		if part.TextureID ~= nil and part.TextureID ~= "" then return end
+		local name = string.lower(part.Name)
+		for _, entry in ipairs(FALLBACK_COLORS) do
+			if string.find(name, entry[1], 1, true) then
+				part.Color = entry[2]
+				part.Material = Enum.Material.SmoothPlastic
+				return
+			end
+		end
+	end
+	if root:IsA("BasePart") then
+		paint(root)
+	else
+		for _, part in ipairs(root:GetDescendants()) do
+			paint(part)
+		end
+	end
+end
+
 return MeshLibrary

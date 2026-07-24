@@ -111,6 +111,8 @@ local function buildTerritory(plotId, slotIndex)
 			local bbCF, bb2 = model:GetBoundingBox()
 			-- Верх меша (газон) на уровне песка площадки: center.Y + 9.5
 			model:TranslateBy(Vector3.new(center.X, center.Y + 9.5 - bb2.Y / 2, center.Z) - bbCF.Position)
+			-- Если импортировали без текстур — красим запасными цветами
+			MeshLibrary.ApplyFallbackColors(model)
 			model.Parent = territoryFolder
 			subMesh = model
 		elseif model then
@@ -118,27 +120,37 @@ local function buildTerritory(plotId, slotIndex)
 		end
 	end
 	if not subMesh then
-		local bottom = Instance.new("Part")
-		bottom.Name = "RockBottom"
-		bottom.Anchored = true
-		bottom.Shape = Enum.PartType.Cylinder
-		bottom.Size = Vector3.new(22, Config.SLOT_PLATFORM_SIZE * 0.9, Config.SLOT_PLATFORM_SIZE * 0.9)
-		bottom.Orientation = Vector3.new(0, 0, 90)
-		bottom.Position = center - Vector3.new(0, 2, 0)
-		bottom.Color = Color3.fromRGB(81, 78, 69)
-		bottom.Material = Enum.Material.Rock
-		bottom.Parent = territoryFolder
+		-- СТАРЫХ КРУГЛЫХ ПЛАТФОРМ БОЛЬШЕ НЕТ: фолбэк — квадратный лего-под-остров
+		-- из партов (зелёная плита + песочная кайма + камень), в стиле мешевого.
+		warn("[FarmManager] Меш под-острова (sub_island) не найден — строю квадратный фолбэк. См. assets/IMPORT_GUIDE.md")
+		local S = Config.SLOT_PLATFORM_SIZE
 
-		local top = Instance.new("Part")
-		top.Name = "IslandTop"
-		top.Anchored = true
-		top.Shape = Enum.PartType.Cylinder
-		top.Size = Vector3.new(7, Config.SLOT_PLATFORM_SIZE, Config.SLOT_PLATFORM_SIZE)
-		top.Orientation = Vector3.new(0, 0, 90)
-		top.Position = center + Vector3.new(0, 6, 0)
-		top.Color = Color3.fromRGB(240, 202, 116) -- тёплый золотистый песок
-		top.Material = Enum.Material.Sand
-		top.Parent = territoryFolder
+		local green = Instance.new("Part")
+		green.Name = "GreenTop"
+		green.Anchored = true
+		green.Size = Vector3.new(S - 8, 2, S - 8)
+		green.Position = center + Vector3.new(0, 8.5, 0) -- верх = center.Y + 9.5
+		green.Color = Color3.fromRGB(86, 165, 54)
+		green.Material = Enum.Material.SmoothPlastic
+		green.Parent = territoryFolder
+
+		local rim = Instance.new("Part")
+		rim.Name = "SandRim"
+		rim.Anchored = true
+		rim.Size = Vector3.new(S + 4, 2, S + 4)
+		rim.Position = center + Vector3.new(0, 7.2, 0)
+		rim.Color = Color3.fromRGB(226, 176, 88)
+		rim.Material = Enum.Material.SmoothPlastic
+		rim.Parent = territoryFolder
+
+		local rock = Instance.new("Part")
+		rock.Name = "RockBottom"
+		rock.Anchored = true
+		rock.Size = Vector3.new(S - 10, 16, S - 10)
+		rock.Position = center - Vector3.new(0, 1.8, 0)
+		rock.Color = Color3.fromRGB(88, 90, 94)
+		rock.Material = Enum.Material.Slate
+		rock.Parent = territoryFolder
 	end
 
 	-- === Мини-городок вокруг будущего дома: дорожка, фонари, кусты ===
